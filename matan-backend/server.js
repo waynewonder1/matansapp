@@ -1,11 +1,14 @@
 // server.js: small API for the parts that must not run in the browser (the Gemini key).
 // The dashboard talks to Supabase directly for everything else.
 import "dotenv/config";
+import path from "path";
+import { fileURLToPath } from "url";
 import express from "express";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
 import { buildHistory, generateInsights } from "./insights.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 // Which web addresses may call this service. ALLOWED_ORIGIN lists them, separated by commas.
@@ -19,6 +22,17 @@ app.use(cors({
     cb(null, !origin || allowed.includes(origin) || (process.env.ALLOW_LOCAL === "true" && isLocal(origin))),
 }));
 app.use(express.json());
+
+// This one service also serves the dashboard (the files in /public), so there is a single address to share.
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "same-origin");
+  next();
+});
+app.use(express.static(path.join(__dirname, "public"), {
+  setHeaders: (res, file) => { if (/\.(html|js|css)$/.test(file)) res.setHeader("Cache-Control", "no-cache"); },
+}));
 
 // Every request runs as the signed-in staff member, so the database access rules apply to it.
 async function requireStaff(req, res, next) {

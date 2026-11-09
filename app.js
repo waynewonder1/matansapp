@@ -24,7 +24,7 @@ const COL=["#e4572e","#2e86ab","#3f9d5a","#c98a00","#8a5cc2","#d1477a"];
 /* ---------- state ---------- */
 let ME=null,L=[],Q={PP1:[[],[],[],[],[]],PP2:[[],[],[],[],[]]},TERMS=[],TERMID={},CUR="",CURID=0,NOQ={},TD=null;
 let CLASSID={},CLASSIDS={},TEACH={},AREAID=[],AREAIDX={},COMP={},STAFF={},AGR=[];
-const S={view:"loading",sel:null,cls:"All",q:"",sess:null,rev:null,rg:undefined,rr:"",err:"",ba:0,saving:false,wq:null,eq:null,af:null,tdLoading:false};
+const S={view:"loading",sel:null,cls:"All",q:"",sess:null,rev:null,rg:undefined,rr:"",err:"",ba:0,saving:false,wq:null,eq:null,af:null,tdLoading:false,leave:null,atLoading:false,lcls:"All"};
 
 /* ---------- small helpers ---------- */
 const num=v=>typeof v==="number";
@@ -123,6 +123,7 @@ async function loadAll(){
   CUR=TERMS[TERMS.length-1]||"";CURID=tm.length?tm[tm.length-1].id:0;
   AREAIDX={};AREAID=[];
   ar.forEach(a=>{const i=AREAS.findIndex(x=>x.full===a.name);if(i>=0){AREAIDX[a.id]=i;AREAID[i]=a.id}});
+  if(Object.keys(AREAIDX).length<5)S.err="The learning area names in the database are out of date, so some scores and questions will not show. Run migration-3.sql in Supabase, then refresh this page.";
   await loadQuestions();
   L=lr.map((r,i)=>({id:r.id,n:i,name:r.full_name,cls:CLASSID[r.class_id],age:r.birth_year?new Date().getFullYear()-r.birth_year:null,
     joined:r.joined_on?new Date(r.joined_on).toLocaleDateString("en-GB",{month:"short",year:"numeric"}):"",att:null,guardian:"",phone:"",
@@ -130,6 +131,9 @@ async function loadAll(){
   gu.forEach(g=>{const l=byId(g.learner_id);if(l&&!l.guardian){l.guardian=g.name;l.phone=g.phone||""}});
   await loadScores();
   AGR=await fetchAll("rater_agreement","learner_id,term_id,competency_id,gap","learner_id");
+  await loadAttendance();
+}
+async function loadAttendance(){
   const att=await fetchAll("attendance","learner_id,present","learner_id"),cnt={};
   att.forEach(a=>{const c=cnt[a.learner_id]=cnt[a.learner_id]||{p:0,n:0};c.n++;if(a.present)c.p++});
   L.forEach(l=>{const c=cnt[l.id];l.att=c?Math.round(100*c.p/c.n):null});
@@ -201,11 +205,11 @@ function chart(l){
 /* ---------- learners list ---------- */
 function listView(){
   return `<div class="tools"><input type="search" id="q" placeholder="Search learners" aria-label="Search learners" value="${esc(S.q)}">
-  ${["All","PP1","PP2"].map(c=>`<button class="chip" data-c="${c}" aria-pressed="${S.cls===c}">${c==="All"?"All classes":c}</button>`).join("")}
+  ${["All","PP1","PP2"].map(c=>`<button class="chip" data-c="${c}" aria-pressed="${S.lcls===c}">${c==="All"?"All classes":c}</button>`).join("")}
   <span class="muted" id="count"></span></div><div class="grid" id="grid"></div>`;
 }
 function fillGrid(){
-  const q=S.q.toLowerCase(),rows=L.filter(l=>(S.cls==="All"||l.cls===S.cls)&&l.name.toLowerCase().includes(q));
+  const q=S.q.toLowerCase(),rows=L.filter(l=>(S.lcls==="All"||l.cls===S.lcls)&&l.name.toLowerCase().includes(q));
   $("count").textContent=`${rows.length} learner${rows.length===1?"":"s"}`;
   $("grid").innerHTML=rows.length?rows.map(l=>`<button class="card" data-i="${l.id}">${av(l,64)}<div><b>${esc(l.name)}</b><span>${l.cls}${l.age!==null?" · age "+l.age:""}</span><div style="margin-top:4px">${has(l)?`${cell(avg(last(l)))} ${arrow(l)} ${support(l)?'<span class="tag warn">Check in</span>':''}`:'<span class="tag">No scores yet</span>'}</div></div></button>`).join(""):`<p class="muted">${L.length?"No learners match. Clear the search or choose All classes.":"No learners have been added yet."}</p>`;
   $("grid").querySelectorAll(".card").forEach(b=>b.onclick=()=>{S.sel=b.dataset.i;S.view="profile";S.err="";render()});
@@ -284,6 +288,16 @@ function recPanel(l){
       <td>${g.t===CUR&&mine?`<button class="ghost" data-rev="${mine.id}" style="padding:2px 10px;font-size:.8rem">Correct mine</button>`:""}</td></tr>`});
   return h+`</tbody></table></div><p class="muted">Showing the latest 40 questions.</p></div>`;
 }
+function termPanel(l){
+  const saved=l.cur.filter(v=>v!==null).length;
+  const dir=[0,1,2,3,4].map(a=>l.log.filter(r=>r.t===CUR&&r.a===a&&r.role==="director"&&live(l,r)).length);
+  if(!saved&&!dir.some(Boolean))return "";
+  return `<div class="panel"><h2>${esc(CUR)} so far</h2>
+  <p class="muted" style="margin-top:0">${saved===5?"All five areas are scored by the teacher, so this term is now included in the scores, chart and trends below.":"The scores, chart and trends below only change once the teacher has scored all five areas for the term. The director’s scores are kept as a check and do not change them."}</p>
+  <div class="scroll"><table><thead><tr><th></th>${AREAS.map(a=>`<th>${a.n}</th>`).join("")}</tr></thead><tbody>
+  <tr><td><b>Teacher</b></td>${l.cur.map(v=>`<td>${v!==null?cell(v):'<span class="muted">not yet</span>'}</td>`).join("")}</tr>
+  <tr><td><b>Director</b></td>${dir.map(n=>`<td>${n?`<span class="muted">${n} scored</span>`:'<span class="muted">not yet</span>'}</td>`).join("")}</tr></tbody></table></div></div>`;
+}
 function profileView(){
   const l=byId(S.sel);
   if(!l)return `<p class="muted">Learner not found.</p>`;
@@ -295,11 +309,13 @@ function profileView(){
    <div style="flex:1;min-width:240px"><h2 style="font-size:1.7rem">${esc(l.name)}</h2>
    <dl class="facts"><div><dt>Class</dt><dd>${l.cls}</dd></div><div><dt>Class teacher</dt><dd>${esc(TEACH[l.cls]||"")}</dd></div><div><dt>Age</dt><dd>${l.age!==null?l.age+" years":"—"}</dd></div><div><dt>Joined</dt><dd>${l.joined||"—"}</dd></div>
    <div><dt>Attendance</dt><dd>${l.att!==null?l.att+"%":"Not recorded"}</dd></div><div><dt>Guardian</dt><dd>${esc(l.guardian||"—")}</dd></div><div><dt>Guardian phone</dt><dd>${esc(l.phone||"—")}</dd></div><div><dt>Average score</dt><dd>${c?f1(avg(c))+" out of 5":"—"}</dd></div></dl>
+   ${ME.role==="head"?(S.leave===l.id?`<p class="note watch" style="margin:8px 0">Mark ${esc(l.name)} as having left Matan? They disappear from the lists. Their records are kept. <button class="ghost" id="leaveyes" style="padding:2px 10px;font-size:.8rem">Yes, mark as left</button> <button class="ghost" id="leaveno" style="padding:2px 10px;font-size:.8rem">Cancel</button></p>`:`<button class="ghost" id="leavebtn" style="margin:8px 8px 0 0;padding:4px 12px;font-size:.85rem">Mark as left school</button>`):""}
    ${[0,1,2,3,4].every(a=>mineSaved(l,a))?`<span class="tag ok">${CUR} done</span>`:`<button class="primary" id="go" style="margin-top:8px">${[0,1,2,3,4].some(a=>mineSaved(l,a))?"Continue":"Start"} ${CUR} assessment</button>`}</div></div>
+  ${termPanel(l)}
   ${c?`<div class="panel"><h2>Latest scores</h2><p class="muted">${l.labels[l.labels.length-1]}</p>
   <div class="towers">${AREAS.map(a=>`<div class="tower">${[1,2,3,4,5].map(i=>`<div class="blk" style="${i<=c[a.k]?`background:var(${a.c})`:''}"></div>`).join("")}<small>${a.n}</small><b>${c[a.k]}</b></div>`).join("")}</div></div>
   <div class="panel"><h2>Progress over time</h2>${chart(l)}
-  <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Term</th>${AREAS.map(a=>`<th>${a.n}</th>`).join("")}<th>Avg</th></tr></thead><tbody>${l.scores.map((s,i)=>`<tr><td>${l.labels[i]}</td>${s.map(v=>`<td>${cell(v)}</td>`).join("")}<td>${f1(avg(s))}</td></tr>`).join("")}</tbody></table></div></div>`:`<div class="panel"><p class="muted" style="margin:0">No completed term yet, so there are no scores or chart to show.</p></div>`}
+  <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Term</th>${AREAS.map(a=>`<th>${a.n}</th>`).join("")}<th>Avg</th></tr></thead><tbody>${l.scores.map((s,i)=>`<tr><td>${l.labels[i]}</td>${s.map(v=>`<td>${cell(v)}</td>`).join("")}<td>${f1(avg(s))}</td></tr>`).join("")}${l.cur.some(v=>v!==null)&&!l.labels.includes(CUR)?`<tr style="opacity:.75"><td>${esc(CUR)} (in progress)</td>${l.cur.map(v=>`<td>${v!==null?cell(v):"—"}</td>`).join("")}<td>—</td></tr>`:""}</tbody></table></div></div>`:`<div class="panel"><p class="muted" style="margin:0">No completed term yet, so there are no scores or chart to show.</p></div>`}
   <div class="panel"><h2>Trends and suggestions</h2>${insights(l).map(o=>`<div class="note ${o.t}">${o.x}</div>`).join("")}
    <p class="muted">These suggestions come from simple rules for now. An AI model will write more personal ones once it is connected.</p></div>
   ${aiPanel(l)}
@@ -313,6 +329,10 @@ function bindProfile(){
   $("back").onclick=()=>{S.view="list";S.rev=null;render()};
   if(!l.loaded)return;
   const go=$("go");if(go)go.onclick=()=>begin(l.id);
+  const lb=$("leavebtn");if(lb)lb.onclick=()=>{S.leave=l.id;rr()};
+  const ln=$("leaveno");if(ln)ln.onclick=()=>{S.leave=null;rr()};
+  const ly=$("leaveyes");if(ly)ly.onclick=async()=>{
+    try{await run(sb.from("learners").update({active:false}).eq("id",l.id));S.leave=null;S.view="list";await loadAll();render()}catch(e){fail(e)}};
   const gi=$("genai");if(gi)gi.onclick=async()=>{
     if(S.saving)return;S.saving=true;S.aiBusy=l.id;S.err="";rr();
     try{
@@ -504,6 +524,105 @@ function bindBank(){
     }catch(e){fail(e)}finally{S.saving=false}};
 }
 
+/* ---------- attendance ---------- */
+const AT={cls:"PP1",date:"",marks:{},loaded:false,msg:""};
+async function loadDay(){
+  AT.marks={};AT.loaded=false;
+  const ids=L.filter(l=>l.cls===AT.cls).map(l=>l.id);
+  if(ids.length){const rows=await run(sb.from("attendance").select("learner_id,present").eq("day",AT.date).in("learner_id",ids));rows.forEach(r=>{AT.marks[r.learner_id]=r.present})}
+  AT.loaded=true;
+}
+function attView(){
+  if(!AT.date)AT.date=todayStr();
+  const rows=L.filter(l=>l.cls===AT.cls),marked=rows.filter(l=>AT.marks[l.id]!==undefined).length;
+  const pres=rows.filter(l=>AT.marks[l.id]===true).length,abs=rows.filter(l=>AT.marks[l.id]===false).length;
+  return `<p class="muted" style="margin-top:0">Mark who is at school each day. The attendance percentages on the learner pages come from these marks.</p>
+  <div class="tools">${["PP1","PP2"].map(c=>`<button class="chip" data-c="${c}" aria-pressed="${AT.cls===c}">${c} · ${esc(TEACH[c]||"")}</button>`).join("")}
+   <label class="muted">Date <input type="date" id="atd" value="${AT.date}" max="${todayStr()}"></label></div>
+  ${!AT.loaded?'<p class="muted">Loading…</p>':`<div class="panel"><h2>${AT.cls} · ${esc(fmtDate(AT.date+"T00:00:00"))}</h2>
+   <p class="muted">${pres} present · ${abs} absent · ${rows.length-marked} not marked</p>
+   <p><button class="ghost" id="atall">Mark everyone present</button></p>
+   ${rows.length?rows.map(l=>`<div class="areaRow"><span style="display:flex;gap:10px;align-items:center">${av(l,36)}<b>${esc(l.name)}</b>${l.att!==null?`<span class="muted">${l.att}% overall</span>`:""}</span>
+    <div class="pick"><button class="sm" style="min-width:90px" data-at="${l.id}" data-v="1" aria-pressed="${AT.marks[l.id]===true}">Present</button><button class="sm" style="min-width:90px" data-at="${l.id}" data-v="0" aria-pressed="${AT.marks[l.id]===false}">Absent</button></div></div>`).join(""):'<p class="muted">No learners in this class yet.</p>'}
+   <button class="primary" id="atsave">Save attendance</button> <span class="toast">${esc(AT.msg)}</span></div>`}`;
+}
+function bindAtt(){
+  document.querySelectorAll(".chip").forEach(b=>b.onclick=async()=>{AT.cls=b.dataset.c;AT.msg="";try{await loadDay()}catch(e){return fail(e)}render()});
+  $("atd").onchange=async e=>{AT.date=e.target.value||todayStr();AT.msg="";try{await loadDay()}catch(er){return fail(er)}render()};
+  const all=$("atall");if(all)all.onclick=()=>{L.filter(l=>l.cls===AT.cls).forEach(l=>{AT.marks[l.id]=true});AT.msg="";rr()};
+  document.querySelectorAll("[data-at]").forEach(b=>b.onclick=()=>{AT.marks[b.dataset.at]=b.dataset.v==="1";AT.msg="";rr()});
+  const sv=$("atsave");if(sv)sv.onclick=async()=>{
+    const rows=L.filter(l=>l.cls===AT.cls&&AT.marks[l.id]!==undefined).map(l=>({learner_id:l.id,day:AT.date,present:AT.marks[l.id]}));
+    if(!rows.length){S.err="Mark at least one learner first.";render();return}
+    if(S.saving)return;S.saving=true;
+    try{await run(sb.from("attendance").upsert(rows,{onConflict:"learner_id,day"}));await loadAttendance();AT.msg=`Saved for ${rows.length} learner${rows.length===1?"":"s"}.`;S.err="";rr()}
+    catch(e){fail(e)}finally{S.saving=false}};
+}
+
+/* ---------- add learners (director) ---------- */
+const AD={single:{name:"",cls:"PP1",year:"",joined:"",gname:"",gphone:""},bulk:"",preview:null,msg:""};
+function parseBulk(text){
+  const have=new Set(L.map(l=>l.name.toLowerCase()+"|"+l.cls)),seen=new Set(),thisYear=new Date().getFullYear(),rows=[];
+  text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean).forEach((line,i)=>{
+    const [name="",c="",y="",gname="",gphone=""]=line.split(",").map(x=>x.trim()),cls=c.toUpperCase(),r={n:i+1,name,cls,year:y,gname,gphone,status:"ok",msg:"Ready"};
+    if(!name){r.status="error";r.msg="Name is missing"}
+    else if(cls!=="PP1"&&cls!=="PP2"){r.status="error";r.msg="Class must be PP1 or PP2"}
+    else if(y&&!(/^\d{4}$/.test(y)&&+y>=2010&&+y<=thisYear)){r.status="error";r.msg="Birth year should be four digits, like 2021"}
+    else if(gphone&&!gname){r.status="error";r.msg="A phone number needs a guardian name"}
+    else if(have.has(name.toLowerCase()+"|"+cls)){r.status="dup";r.msg="Already in the system, will be skipped"}
+    else if(seen.has(name.toLowerCase()+"|"+cls)){r.status="dup";r.msg="Listed twice, will be skipped"}
+    else seen.add(name.toLowerCase()+"|"+cls);
+    rows.push(r)});
+  return rows;
+}
+async function addOne(r,joined){
+  const lr=await run(sb.from("learners").insert({full_name:r.name,class_id:CLASSIDS[r.cls],birth_year:r.year?+r.year:null,joined_on:joined||todayStr()}).select("id").single());
+  if(r.gname)await run(sb.from("guardians").insert({learner_id:lr.id,name:r.gname,phone:r.gphone||null}));
+}
+function addView(){
+  const s=AD.single,pv=AD.preview,okRows=pv?pv.filter(r=>r.status==="ok"):[];
+  return `<p class="muted" style="margin-top:0">Only the director can add learners. Add one child with the form, or paste a list to add many at once.</p>
+  ${AD.msg?`<div class="note good">${esc(AD.msg)}</div>`:""}
+  <div class="panel"><h2>Add one learner</h2>
+   <div class="row2">
+    <label class="muted" style="flex:2;min-width:200px">Full name<br><input type="search" id="a_name" style="width:100%" value="${esc(s.name)}"></label>
+    <label class="muted">Class<br><select id="a_cls">${["PP1","PP2"].map(c=>`<option ${s.cls===c?"selected":""}>${c}</option>`).join("")}</select></label>
+    <label class="muted">Birth year<br><input type="search" id="a_year" size="6" placeholder="2021" value="${esc(s.year)}"></label>
+    <label class="muted">Joined<br><input type="date" id="a_joined" value="${esc(s.joined||todayStr())}"></label></div>
+   <div class="row2" style="margin-top:8px">
+    <label class="muted" style="flex:2;min-width:200px">Guardian name<br><input type="search" id="a_gname" style="width:100%" value="${esc(s.gname)}"></label>
+    <label class="muted" style="flex:1;min-width:160px">Guardian phone<br><input type="search" id="a_gphone" style="width:100%" placeholder="0712 345 678" value="${esc(s.gphone)}"></label></div>
+   <button class="primary" id="a_save">Add learner</button></div>
+  <div class="panel"><h2>Add many learners</h2>
+   <p class="muted">Paste one learner per line, with commas between: full name, class, birth year, guardian name, guardian phone. The class must be PP1 or PP2. The last three can be left empty. For example:</p>
+   <p><code>Amina Wanjiku, PP1, 2021, Grace Wanjiku, 0712 345 678</code></p>
+   <textarea id="a_bulk" rows="7" style="width:100%" aria-label="List of learners">${esc(AD.bulk)}</textarea>
+   <p><button class="ghost" id="a_prev">Check the list</button></p>
+   ${pv?(pv.length?`<div class="scroll"><table style="min-width:620px"><thead><tr><th>#</th><th>Name</th><th>Class</th><th>Birth year</th><th>Guardian</th><th>Phone</th><th>Check</th></tr></thead><tbody>${pv.map(r=>`<tr><td>${r.n}</td><td>${esc(r.name)}</td><td>${esc(r.cls)}</td><td>${esc(r.year)}</td><td>${esc(r.gname)}</td><td>${esc(r.gphone)}</td><td><span class="tag ${r.status==="ok"?"ok":"warn"}">${esc(r.msg)}</span></td></tr>`).join("")}</tbody></table></div>
+    <p class="muted">${okRows.length} ready to add · ${pv.length-okRows.length} will be skipped.</p>
+    <button class="primary" id="a_imp" ${okRows.length?"":"disabled"} style="margin-top:0">Add ${okRows.length} learner${okRows.length===1?"":"s"}</button>`:'<p class="muted">The list is empty.</p>'):""}</div>`;
+}
+function bindAdd(){
+  const v=id=>$(id).value.trim();
+  $("a_save").onclick=async()=>{
+    const r={name:v("a_name"),cls:v("a_cls"),year:v("a_year"),gname:v("a_gname"),gphone:v("a_gphone")};
+    AD.single={...r,joined:$("a_joined").value};
+    const bad=parseBulk([r.name,r.cls,r.year,r.gname,r.gphone].join(","))[0];
+    if(bad.status!=="ok"){S.err=bad.status==="dup"?`${r.name} is already in ${r.cls}.`:bad.msg+".";render();return}
+    if(S.saving)return;S.saving=true;
+    try{await addOne(r,AD.single.joined);AD.single={name:"",cls:r.cls,year:"",joined:"",gname:"",gphone:""};AD.msg=`${r.name} was added to ${r.cls}.`;S.err="";await loadAll();render()}
+    catch(e){fail(e)}finally{S.saving=false}};
+  $("a_prev").onclick=()=>{AD.bulk=$("a_bulk").value;AD.preview=parseBulk(AD.bulk);AD.msg="";render()};
+  const imp=$("a_imp");if(imp)imp.onclick=async()=>{
+    const rows=(AD.preview||[]).filter(r=>r.status==="ok");if(!rows.length||S.saving)return;S.saving=true;
+    let added=0;
+    try{for(const r of rows){await addOne(r);added++}AD.msg=`${added} learner${added===1?"":"s"} added.`;AD.bulk="";AD.preview=null;S.err=""}
+    catch(e){S.err=`Stopped after adding ${added} of ${rows.length}. ${e.message} Check the list again before adding the rest: names already added are skipped.`;AD.preview=null}
+    finally{S.saving=false}
+    try{await loadAll()}catch(e){}
+    render()};
+}
+
 /* ---------- teaching insights ---------- */
 const keyOf=r=>r.learner_id+"|"+r.term_id+"|"+r.competency_id;
 async function loadTeachData(){
@@ -566,17 +685,19 @@ function render(){
     $("nav").innerHTML="";m.innerHTML=loginView();
     $("signin").onclick=doLogin;$("pw").onkeydown=e=>{if(e.key==="Enter")doLogin()};return}
   const pend=ME.role==="head"?Object.values(Q).flat(2).filter(q=>q.ok===false).length:0;
-  const tabs=[["list","Learners"],["queue","Assessment"],["bank","Question bank"+(pend?` (${pend} to approve)`:"")]].concat(ME.role==="head"?[["teach","Teaching insights"]]:[]);
+  const tabs=[["list","Learners"],["queue","Assessment"],["att","Attendance"],["bank","Question bank"+(pend?` (${pend} to approve)`:"")]].concat(ME.role==="head"?[["add","Add learners"],["teach","Teaching insights"]]:[]);
   const cur=S.view==="profile"?"list":S.view==="assess"?"queue":S.view;
   $("nav").innerHTML=tabs.map(t=>`<button data-t="${t[0]}" ${cur===t[0]?'aria-current="page"':''}>${t[1]}</button>`).join("");
-  $("nav").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.view=b.dataset.t;S.err="";S.sess=null;S.eq=null;S.wq=null;if(b.dataset.t==="teach")TD=null;render()});
+  $("nav").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.view=b.dataset.t;S.err="";S.sess=null;S.eq=null;S.wq=null;if(b.dataset.t==="teach")TD=null;if(b.dataset.t==="att")AT.loaded=false;AD.msg="";render()});
   const err=S.err?`<div class="note watch" role="alert">${esc(S.err)} <button class="ghost" id="dismiss" style="padding:2px 10px;font-size:.8rem">Dismiss</button></div>`:"";
-  m.innerHTML=err+(S.view==="list"?listView():S.view==="profile"?profileView():S.view==="queue"?queueView():S.view==="assess"?assessView():S.view==="bank"?bankView():teachView());
+  m.innerHTML=err+(S.view==="list"?listView():S.view==="profile"?profileView():S.view==="queue"?queueView():S.view==="assess"?assessView():S.view==="bank"?bankView():S.view==="att"?attView():S.view==="add"?addView():teachView());
   const dm=$("dismiss");if(dm)dm.onclick=()=>{S.err="";render()};
-  if(S.view==="list"){fillGrid();$("q").oninput=e=>{S.q=e.target.value;fillGrid()};m.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{S.cls=b.dataset.c;render()})}
+  if(S.view==="list"){fillGrid();$("q").oninput=e=>{S.q=e.target.value;fillGrid()};m.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{S.lcls=b.dataset.c;render()})}
   if(S.view==="queue"){m.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{S.cls=b.dataset.c;render()});m.querySelectorAll(".card").forEach(b=>b.onclick=()=>begin(b.dataset.i))}
   if(S.view==="assess")bindAssess();
   if(S.view==="bank")bindBank();
+  if(S.view==="att"){bindAtt();if(!AT.loaded&&!S.atLoading){S.atLoading=true;if(!AT.date)AT.date=todayStr();loadDay().then(()=>{S.atLoading=false;render()}).catch(e=>{S.atLoading=false;fail(e)})}}
+  if(S.view==="add")bindAdd();
   if(S.view==="teach"){bindTeach();if(!TD&&!S.tdLoading){S.tdLoading=true;loadTeachData().then(()=>{S.tdLoading=false;render()}).catch(e=>{S.tdLoading=false;fail(e)})}}
   if(S.view==="profile"){
     const l=byId(S.sel);
@@ -585,4 +706,3 @@ function render(){
   }
 }
 boot();
-
