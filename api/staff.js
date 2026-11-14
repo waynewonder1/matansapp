@@ -17,7 +17,11 @@ function newPassword() {
 
 const base = () => process.env.SUPABASE_URL;
 async function call(path, { method = "GET", key, token, body, prefer } = {}) {
-  const headers = { apikey: key, Authorization: "Bearer " + (token || key), "Content-Type": "application/json" };
+  // The new Supabase keys (sb_publishable_..., sb_secret_...) are not JWTs and go in the apikey header only.
+  // The older anon and service_role keys are JWTs and are also sent as the bearer.
+  const headers = { apikey: key, "Content-Type": "application/json" };
+  if (token) headers.Authorization = "Bearer " + token;
+  else if (!String(key).startsWith("sb_")) headers.Authorization = "Bearer " + key;
   if (prefer) headers.Prefer = prefer;
   const r = await fetch(base() + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let json = null;
