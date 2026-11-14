@@ -1,0 +1,401 @@
+-- migration-8-checks-curriculum-reports.sql
+-- Stage 3: curriculum tick-off, small checks (kept apart from end-of-term exams), AI insights after checks, and termly report cards.
+-- Run once in the Supabase SQL Editor, AFTER migration-4, 5, 6 and 7. Safe to run again.
+--
+-- How the pieces fit together:
+--   * assessment_records stays as it is. It is the END-OF-TERM EXAM, and it is the only thing that feeds the graph, the trend and the report card.
+--   * check_records is new. Small checks go here, so they never move the graph.
+--   * assessment_notes holds the short insight written after a small check (the teacher approves it before it is saved).
+--   * curriculum_items holds every sub-strand of the KICD designs; curriculum_coverage records which ones have been taught.
+--   * report_comments holds the teacher's and the director's words on each learner's termly report card.
+
+-- ---------- curriculum ----------
+create table if not exists curriculum_items (
+  id uuid primary key default gen_random_uuid(),
+  cls text not null check (cls in ('PG','PP1','PP2')),
+  area smallint not null check (area between 0 and 4),   -- same 0..4 order the app uses for the class
+  code text not null,
+  strand text,
+  name text not null,
+  lessons integer,
+  term smallint,                                          -- planned term (Playgroup design only)
+  sort integer not null default 0,
+  unique (cls, area, code)
+);
+create table if not exists curriculum_coverage (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references curriculum_items(id) on delete cascade,
+  term_id bigint,                                         -- the term in which it was taught
+  taught_on date not null default current_date,
+  taught_by uuid references staff(id),
+  note text,
+  created_at timestamptz not null default now(),
+  unique (item_id)
+);
+
+-- ---------- small checks ----------
+create table if not exists check_records (
+  id uuid primary key default gen_random_uuid(),
+  batch_id uuid not null,                                 -- one small check = one batch
+  learner_id uuid not null references learners(id) on delete cascade,
+  term_id bigint,
+  area smallint not null check (area between 0 and 4),
+  competency_id text,                                     -- kept as text so it works whatever type competencies.id has
+  variant_id text,
+  rater_id uuid references staff(id),
+  rater_role text,
+  score text not null,
+  support_code text,
+  comment text,
+  entered_at timestamptz not null default now()
+);
+create index if not exists check_records_learner on check_records(learner_id, entered_at);
+
+create table if not exists assessment_notes (
+  id uuid primary key default gen_random_uuid(),
+  learner_id uuid not null references learners(id) on delete cascade,
+  kind text not null default 'check' check (kind in ('check')),
+  batch_id uuid,
+  term_id bigint,
+  area smallint,
+  avg_score numeric,
+  body text not null,
+  source text not null default 'rules' check (source in ('ai','rules','teacher')),
+  created_by uuid references staff(id),
+  created_at timestamptz not null default now()
+);
+create index if not exists assessment_notes_learner on assessment_notes(learner_id, created_at);
+
+-- ---------- report card comments ----------
+create table if not exists report_comments (
+  learner_id uuid not null references learners(id) on delete cascade,
+  term_id bigint not null,
+  teacher_comment text,
+  head_comment text,
+  teacher_by uuid references staff(id),
+  head_by uuid references staff(id),
+  updated_at timestamptz not null default now(),
+  primary key (learner_id, term_id)
+);
+
+-- ---------- security ----------
+alter table curriculum_items enable row level security;
+alter table curriculum_coverage enable row level security;
+alter table check_records enable row level security;
+alter table assessment_notes enable row level security;
+alter table report_comments enable row level security;
+
+drop policy if exists cur_items_read on curriculum_items;
+create policy cur_items_read on curriculum_items for select to authenticated using (public.matan_is_staff());
+drop policy if exists cur_items_write on curriculum_items;
+create policy cur_items_write on curriculum_items for all to authenticated using (public.matan_is_admin()) with check (public.matan_is_admin());
+
+drop policy if exists cur_cov_read on curriculum_coverage;
+create policy cur_cov_read on curriculum_coverage for select to authenticated using (public.matan_is_staff());
+drop policy if exists cur_cov_add on curriculum_coverage;
+create policy cur_cov_add on curriculum_coverage for insert to authenticated with check (public.matan_is_staff());
+drop policy if exists cur_cov_del on curriculum_coverage;
+create policy cur_cov_del on curriculum_coverage for delete to authenticated using (public.matan_is_staff());
+
+drop policy if exists checks_read on check_records;
+create policy checks_read on check_records for select to authenticated using (public.matan_is_staff());
+drop policy if exists checks_add on check_records;
+create policy checks_add on check_records for insert to authenticated
+  with check (public.matan_can_edit_learner(learner_id) and rater_id = auth.uid());
+-- no update or delete policy: small checks, like exams, are never edited after saving.
+
+drop policy if exists notes_read on assessment_notes;
+create policy notes_read on assessment_notes for select to authenticated using (public.matan_is_staff());
+drop policy if exists notes_add on assessment_notes;
+create policy notes_add on assessment_notes for insert to authenticated
+  with check (public.matan_can_edit_learner(learner_id) and created_by = auth.uid());
+
+drop policy if exists rc_read on report_comments;
+create policy rc_read on report_comments for select to authenticated using (public.matan_is_staff());
+drop policy if exists rc_add on report_comments;
+create policy rc_add on report_comments for insert to authenticated with check (public.matan_can_edit_learner(learner_id));
+drop policy if exists rc_change on report_comments;
+create policy rc_change on report_comments for update to authenticated
+  using (public.matan_can_edit_learner(learner_id)) with check (public.matan_can_edit_learner(learner_id));
+
+-- The director's comment can only be written by the director.
+create or replace function public.matan_guard_report_comment() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if (tg_op = 'INSERT' and new.head_comment is not null and not public.matan_is_head())
+     or (tg_op = 'UPDATE' and new.head_comment is distinct from old.head_comment and not public.matan_is_head()) then
+    raise exception 'Only the director can write the director''s comment.';
+  end if;
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists report_comments_guard on report_comments;
+create trigger report_comments_guard before insert or update on report_comments
+  for each row execute function public.matan_guard_report_comment();
+
+-- ---------- the curriculum, from the KICD designs you shared ----------
+-- Playgroup (60 sub-strands with planned terms) and PP1 / PP2 (sub-strands from each design's summary table).
+-- PP1 and PP2 use Christian Religious Education as the fifth area, the same as the rest of the app.
+insert into curriculum_items (cls, area, code, strand, name, lessons, term, sort) values
+('PG',0,'1.1.1','Listening and speaking','Names and greetings',8,1,0),
+('PG',0,'1.1.2','Listening and speaking','Listening and simple directions',12,1,1),
+('PG',0,'1.1.3','Pre-reading','Picture talk and book care',10,1,2),
+('PG',0,'1.1.4','Pre-writing','Marks and movement',10,1,3),
+('PG',0,'1.2.1','Listening and speaking','Vocabulary and describing',8,2,4),
+('PG',0,'1.2.2','Listening and speaking','Stories and sequencing',12,2,5),
+('PG',0,'1.2.3','Pre-reading','Rhyme and sound play',10,2,6),
+('PG',0,'1.2.4','Pre-writing','Lines and shapes',10,2,7),
+('PG',0,'1.3.1','Listening and speaking','Questions and conversation',8,3,8),
+('PG',0,'1.3.2','Listening and speaking','Retelling and oral expression',12,3,9),
+('PG',0,'1.3.3','Pre-reading','Print and sound awareness',10,3,10),
+('PG',0,'1.3.4','Pre-writing','Representational drawing',10,3,11),
+('PG',1,'2.1.1','Number sense','Counting in play',8,1,12),
+('PG',1,'2.1.2','Number sense','Matching and sorting',12,1,13),
+('PG',1,'2.1.3','Geometry','Shapes around us',10,1,14),
+('PG',1,'2.1.4','Measurement','Big and small',10,1,15),
+('PG',1,'2.2.1','Number sense','Counting and quantities',8,2,16),
+('PG',1,'2.2.2','Number sense','More, fewer and equal',12,2,17),
+('PG',1,'2.2.3','Patterns','Repeating patterns',10,2,18),
+('PG',1,'2.2.4','Spatial awareness','Position and direction',10,2,19),
+('PG',1,'2.3.1','Number sense','Numeral and quantity links',8,3,20),
+('PG',1,'2.3.2','Mathematical reasoning','Problems in daily routines',12,3,21),
+('PG',1,'2.3.3','Geometry','Shape construction',10,3,22),
+('PG',1,'2.3.4','Measurement and patterns','Comparing and sequencing',10,3,23),
+('PG',3,'3.1.1','Art and expression','Colour and sensory art',8,1,24),
+('PG',3,'3.1.2','Music and movement','Songs and rhythm',12,1,25),
+('PG',3,'3.1.3','Gross motor','Balance and movement',10,1,26),
+('PG',3,'3.1.4','Fine motor','Hands and tools',10,1,27),
+('PG',3,'3.2.1','Art and expression','Mixing and making',8,2,28),
+('PG',3,'3.2.2','Music and movement','Sound patterns',12,2,29),
+('PG',3,'3.2.3','Gross motor','Throwing and catching',10,2,30),
+('PG',3,'3.2.4','Fine motor','Joining and modelling',10,2,31),
+('PG',3,'3.3.1','Art and expression','Representing ideas',8,3,32),
+('PG',3,'3.3.2','Music and movement','Perform and create',12,3,33),
+('PG',3,'3.3.3','Gross motor','Movement challenges',10,3,34),
+('PG',3,'3.3.4','Fine motor','Tool control and readiness',10,3,35),
+('PG',2,'4.1.1','Self and surroundings','My body and senses',8,1,36),
+('PG',2,'4.1.2','People and places','My school',12,1,37),
+('PG',2,'4.1.3','Living things','Plants and animals',10,1,38),
+('PG',2,'4.1.4','Weather','Daily weather',10,1,39),
+('PG',2,'4.2.1','People and community','Family and helpers',8,2,40),
+('PG',2,'4.2.2','Living things','Growing things',12,2,41),
+('PG',2,'4.2.3','Materials','Water and materials',10,2,42),
+('PG',2,'4.2.4','Environment','Keeping places clean',10,2,43),
+('PG',2,'4.3.1','Living things','Changes and life cycles',8,3,44),
+('PG',2,'4.3.2','People and places','Transport and journeys',12,3,45),
+('PG',2,'4.3.3','Materials and science','Exploring cause and effect',10,3,46),
+('PG',2,'4.3.4','Environment','Caring for nature',10,3,47),
+('PG',4,'5.1.1','Self-awareness','Names and feelings',8,1,48),
+('PG',4,'5.1.2','Relationships','Sharing and turn-taking',12,1,49),
+('PG',4,'5.1.3','Self-care','Classroom routines',10,1,50),
+('PG',4,'5.1.4','Values and belonging','Kindness and inclusion',10,1,51),
+('PG',4,'5.2.1','Emotional literacy','Naming and coping',8,2,52),
+('PG',4,'5.2.2','Relationships','Working together',12,2,53),
+('PG',4,'5.2.3','Safety and health','Safe daily choices',10,2,54),
+('PG',4,'5.2.4','Independence','Choosing and persisting',10,2,55),
+('PG',4,'5.3.1','Identity and community','Belonging and differences',8,3,56),
+('PG',4,'5.3.2','Relationships','Conflict and repair',12,3,57),
+('PG',4,'5.3.3','Self-care','Growing independence',10,3,58),
+('PG',4,'5.3.4','Readiness','Confidence for PP1',10,3,59),
+('PP1',0,'1.1.1',null,'Greetings and farewell',3,null,60),
+('PP1',0,'1.1.2',null,'Time related greetings and farewell',3,null,61),
+('PP1',0,'1.2.1',null,'Reading readiness',4,null,62),
+('PP1',0,'1.3.1',null,'Print awareness',2,null,63),
+('PP1',0,'2.1.1',null,'Self awareness',2,null,64),
+('PP1',0,'2.1.2',null,'Listening for enjoyment',3,null,65),
+('PP1',0,'2.2.1',null,'Book handling',2,null,66),
+('PP1',0,'2.2.2',null,'Reading posture',2,null,67),
+('PP1',0,'2.3.1',null,'Writing posture',2,null,68),
+('PP1',0,'2.3.2',null,'Pre-writing skills',5,null,69),
+('PP1',0,'3.1.1',null,'Active listening',3,null,70),
+('PP1',0,'3.1.2',null,'Self-expression',4,null,71),
+('PP1',0,'3.2.1',null,'Print awareness',3,null,72),
+('PP1',0,'3.2.2',null,'Phonic awareness (a-e)',5,null,73),
+('PP1',0,'3.3.1',null,'Eye-hand coordination',2,null,74),
+('PP1',0,'3.3.2',null,'Writing readiness (a-e)',5,null,75),
+('PP1',0,'4.1.1',null,'Naming',3,null,76),
+('PP1',0,'4.1.2',null,'Passing information',3,null,77),
+('PP1',0,'4.2.1',null,'Visual discrimination',5,null,78),
+('PP1',0,'4.2.2',null,'Phonic awareness (f-j)',6,null,79),
+('PP1',0,'4.3.1',null,'Writing letters representing sounds',6,null,80),
+('PP1',0,'5.1.1',null,'Environmental awareness',4,null,81),
+('PP1',0,'5.1.2',null,'Auditory discrimination',5,null,82),
+('PP1',0,'5.1.3',null,'Audience awareness',3,null,83),
+('PP1',0,'5.2.1',null,'Visual memory',3,null,84),
+('PP1',0,'5.2.2',null,'Phonic awareness (k-r)',8,null,85),
+('PP1',0,'5.3.1',null,'Pattern writing',2,null,86),
+('PP1',0,'5.3.2',null,'Writing letters representing sounds (k-r)',8,null,87),
+('PP1',0,'6.1.1',null,'Auditory memory',3,null,88),
+('PP1',0,'6.2.1',null,'Phonic awareness (s-z)',8,null,89),
+('PP1',0,'6.2.2',null,'Articulation of letter sounds (vowel sounds a,e,i,o,u)',3,null,90),
+('PP1',0,'6.2.3',null,'Letter recognition',8,null,91),
+('PP1',0,'6.2.4',null,'Picture reading',1,null,92),
+('PP1',0,'6.3.1',null,'Writing letters representing sounds (s-z)',8,null,93),
+('PP1',0,'6.3.2',null,'Letter formation',8,null,94),
+('PP1',0,'6.3.3',null,'Writing practice',5,null,95),
+('PP1',1,'1.1',null,'Sorting and Grouping',8,null,96),
+('PP1',1,'1.2',null,'Matching and Pairing',8,null,97),
+('PP1',1,'1.3',null,'Ordering',8,null,98),
+('PP1',1,'1.4',null,'Patterns',8,null,99),
+('PP1',1,'2.1',null,'Rote Counting',8,null,100),
+('PP1',1,'2.2',null,'Number Recognition',10,null,101),
+('PP1',1,'2.3',null,'Counting Concrete Objects',10,null,102),
+('PP1',1,'2.4',null,'Number Sequencing',10,null,103),
+('PP1',1,'2.5',null,'Number Writing',10,null,104),
+('PP1',1,'3.1',null,'Sides of Objects',10,null,105),
+('PP1',1,'3.2',null,'Mass (Heavy and Light)',10,null,106),
+('PP1',1,'3.3',null,'Capacity (how much a container can hold)',10,null,107),
+('PP1',1,'3.4',null,'Time (Daily Routines)',10,null,108),
+('PP1',1,'3.5',null,'Money (Kenyan currency -Ksh.1 coins)',10,null,109),
+('PP1',1,'3.6',null,'Area (Surface of Objects)',10,null,110),
+('PP1',1,'4.1',null,'Lines',4,null,111),
+('PP1',1,'4.2',null,'Shapes',6,null,112),
+('PP1',2,'1.1',null,'Self-awareness',10,null,113),
+('PP1',2,'1.2',null,'External Body Parts',12,null,114),
+('PP1',2,'1.3',null,'Handwashing',10,null,115),
+('PP1',2,'1.4',null,'Brushing Teeth',10,null,116),
+('PP1',2,'2.1',null,'Family Members',12,null,117),
+('PP1',2,'2.2',null,'Feeding',12,null,118),
+('PP1',2,'3.1',null,'Utensils Used at Home',12,null,119),
+('PP1',2,'3.2',null,'Furniture Used at Home',10,null,120),
+('PP1',2,'4.1',null,'Classmates',10,null,121),
+('PP1',2,'4.2',null,'Friends',10,null,122),
+('PP1',2,'4.3',null,'Parts of a Plant',10,null,123),
+('PP1',2,'5.1',null,'My Class',10,null,124),
+('PP1',2,'5.2',null,'Care for My Class',12,null,125),
+('PP1',2,'5.3',null,'Cleanliness',14,null,126),
+('PP1',3,'1.1',null,'Scribbling',15,null,127),
+('PP1',3,'1.2',null,'Printing',20,null,128),
+('PP1',3,'2.1',null,'Colouring',20,null,129),
+('PP1',3,'2.2',null,'Joining dots',20,null,130),
+('PP1',3,'3.1',null,'Modelling',20,null,131),
+('PP1',3,'3.2',null,'Musical sounds',20,null,132),
+('PP1',3,'4.1',null,'Crawling and Bending',25,null,133),
+('PP1',3,'4.2',null,'Singing game',20,null,134),
+('PP1',3,'4.3',null,'Water play',20,null,135),
+('PP1',4,'1.1',null,'Our God',7,null,136),
+('PP1',4,'1.2',null,'God Our Creator',8,null,137),
+('PP1',4,'1.3',null,'God our Loving Father',8,null,138),
+('PP1',4,'2.1',null,'A Holy Book',7,null,139),
+('PP1',4,'2.2',null,'David and Goliath',6,null,140),
+('PP1',4,'3.1',null,'The Birth of Jesus Christ',8,null,141),
+('PP1',4,'3.2',null,'The Wise Men',7,null,142),
+('PP1',4,'4.1',null,'Love for God',7,null,143),
+('PP1',4,'4.2',null,'Love for Neighbour',9,null,144),
+('PP1',4,'4.3',null,'Sharing with Others',8,null,145),
+('PP1',4,'5.1',null,'A house of God',7,null,146),
+('PP1',4,'5.2',null,'Church Activities',8,null,147),
+('PP2',0,'1.1.1',null,'Greetings and farewell',3,null,148),
+('PP2',0,'1.1.2',null,'Time-related greetings and farewell',2,null,149),
+('PP2',0,'1.2.1',null,'Reading readiness',3,null,150),
+('PP2',0,'1.3.1',null,'Writing readiness',2,null,151),
+('PP2',0,'2.1.1',null,'Listening for comprehension',2,null,152),
+('PP2',0,'2.1.2',null,'News telling',2,null,153),
+('PP2',0,'2.2.1',null,'Book handling',2,null,154),
+('PP2',0,'2.2.2',null,'Reading readiness',2,null,155),
+('PP2',0,'2.2.3',null,'Letter recognition',8,null,156),
+('PP2',0,'2.3.1',null,'Letter writing',6,null,157),
+('PP2',0,'2.3.2',null,'Writing practice',2,null,158),
+('PP2',0,'3.1.1',null,'Active Listening',2,null,159),
+('PP2',0,'3.1.2',null,'Self-expression',2,null,160),
+('PP2',0,'3.2.1',null,'Print awareness',3,null,161),
+('PP2',0,'3.2.2',null,'Reading syllables (ba - bu, da – du)',2,null,162),
+('PP2',0,'3.3.1',null,'Drawing and colouring pictures',1,null,163),
+('PP2',0,'3.3.2',null,'Writing syllables (ba - bu, da – du)',2,null,164),
+('PP2',0,'4.1.1',null,'Polite language',2,null,165),
+('PP2',0,'4.1.2',null,'Passing information',2,null,166),
+('PP2',0,'4.2.1',null,'Visual discrimination',3,null,167),
+('PP2',0,'4.2.2',null,'Letter-sound correspondence',4,null,168),
+('PP2',0,'4.2.3',null,'Reading syllables',2,null,169),
+('PP2',0,'4.3.1',null,'Eye-hand coordination',2,null,170),
+('PP2',0,'4.3.2',null,'Writing letters of the alphabet',2,null,171),
+('PP2',0,'5.1.1',null,'Auditory discrimination',2,null,172),
+('PP2',0,'5.1.2',null,'Audience awareness',2,null,173),
+('PP2',0,'5.2.1',null,'Visual memory',3,null,174),
+('PP2',0,'5.2.2',null,'Reading syllables (ja-ju, la-lu)',2,null,175),
+('PP2',0,'5.3.1',null,'Pattern writing',2,null,176),
+('PP2',0,'5.3.2',null,'Writing syllables (ja-ju, la-lu)',2,null,177),
+('PP2',0,'6.1.1',null,'Auditory memory',2,null,178),
+('PP2',0,'6.1.2',null,'Reporting skills',2,null,179),
+('PP2',0,'6.2.1',null,'Visual discrimination',3,null,180),
+('PP2',0,'6.2.2',null,'Reading syllables (ma-mu, pa-pu)',3,null,181),
+('PP2',0,'6.3.1',null,'Recording skills',2,null,182),
+('PP2',0,'6.3.2',null,'Writing syllables (ma-mu, pa-pu)',2,null,183),
+('PP2',0,'7.1.1',null,'Naming',3,null,184),
+('PP2',0,'7.1.2',null,'Articulation of letter sounds',2,null,185),
+('PP2',0,'7.2.1',null,'Picture reading',1,null,186),
+('PP2',0,'7.2.2',null,'Reading syllables (ra-ru, ta-tu)',2,null,187),
+('PP2',0,'7.2.3',null,'Word formation',4,null,188),
+('PP2',0,'7.3.1',null,'Hand writing',4,null,189),
+('PP2',0,'7.3.2',null,'Writing syllables (ra-ru, ta-tu)',2,null,190),
+('PP2',0,'8.1.1',null,'News telling',5,null,191),
+('PP2',0,'8.1.2',null,'Passing information',4,null,192),
+('PP2',0,'8.1.3',null,'Story telling',4,null,193),
+('PP2',0,'8.2.1',null,'Reading syllables (va-vu, za-zu),',2,null,194),
+('PP2',0,'8.2.2',null,'Reading three-letter words',2,null,195),
+('PP2',0,'8.3.1',null,'Writing syllables',2,null,196),
+('PP2',0,'8.3.2',null,'Writing three-letter words',2,null,197),
+('PP2',0,'9.1.1',null,'Naming',4,null,198),
+('PP2',0,'9.1.2',null,'News telling',4,null,199),
+('PP2',0,'9.2.1',null,'Picture reading',2,null,200),
+('PP2',0,'9.3.1',null,'Drawing and colouring pictures',3,null,201),
+('PP2',0,'9.3.2',null,'Writing practice',5,null,202),
+('PP2',1,'1.1',null,'Sorting and Grouping',7,null,203),
+('PP2',1,'1.2',null,'Matching and Pairing',7,null,204),
+('PP2',1,'1.3',null,'Ordering',8,null,205),
+('PP2',1,'1.4',null,'Patterns',8,null,206),
+('PP2',1,'2.1',null,'Rote Counting',6,null,207),
+('PP2',1,'2.2',null,'Number Recognition',8,null,208),
+('PP2',1,'2.3',null,'Counting Concrete Objects',8,null,209),
+('PP2',1,'2.4',null,'Number Sequencing',8,null,210),
+('PP2',1,'2.5',null,'Number Value',8,null,211),
+('PP2',1,'2.6',null,'Number Writing',8,null,212),
+('PP2',1,'2.7',null,'Putting Together',10,null,213),
+('PP2',1,'2.8',null,'Taking Away',8,null,214),
+('PP2',1,'3.1',null,'Sides of Objects',8,null,215),
+('PP2',1,'3.2',null,'Mass (Heavy and Light)',8,null,216),
+('PP2',1,'3.3',null,'Capacity (how much a container can hold)',8,null,217),
+('PP2',1,'3.4',null,'Time (Daily Routines)',8,null,218),
+('PP2',1,'3.5',null,'Money (Kenyan currency – coins)',8,null,219),
+('PP2',1,'3.6',null,'Area (Surface of Objects)',8,null,220),
+('PP2',1,'4.1',null,'Lines',3,null,221),
+('PP2',1,'4.2',null,'Shapes',5,null,222),
+('PP2',2,'1.1',null,'External body parts',10,null,223),
+('PP2',2,'1.2',null,'Uses of body parts',12,null,224),
+('PP2',2,'1.3',null,'Cleaning Nose',5,null,225),
+('PP2',2,'1.4',null,'Dressing',12,null,226),
+('PP2',2,'2.1',null,'Foods',10,null,227),
+('PP2',2,'2.2',null,'Importance of eating food',6,null,228),
+('PP2',2,'3.1',null,'Houses at home',10,null,229),
+('PP2',2,'3.2',null,'Work done at home',10,null,230),
+('PP2',2,'3.3',null,'Domestic Animals',10,null,231),
+('PP2',2,'4.1',null,'Families in our neighbourhood',5,null,232),
+('PP2',2,'4.2',null,'Buildings in our neighbourhood',10,null,233),
+('PP2',2,'4.3',null,'Plants',10,null,234),
+('PP2',2,'5.1',null,'People in our school',10,null,235),
+('PP2',2,'5.2',null,'Things in our school',10,null,236),
+('PP2',2,'5.3',null,'Care for our school',10,null,237),
+('PP2',2,'5.4',null,'Safety in the environment',10,null,238),
+('PP2',2,'5.5',null,'Weather condition',10,null,239),
+('PP2',3,'1.1',null,'Doodling',15,null,240),
+('PP2',3,'1.2',null,'Painting',20,null,241),
+('PP2',3,'2.1',null,'Mosaic',15,null,242),
+('PP2',3,'2.2',null,'Swinging and Stretching',15,null,243),
+('PP2',3,'2.3',null,'Body Percussions',20,null,244),
+('PP2',3,'3.1',null,'Colouring',10,null,245),
+('PP2',3,'3.2',null,'Musical Rhymes',15,null,246),
+('PP2',3,'4.1',null,'Modelling',20,null,247),
+('PP2',3,'4.2',null,'Walking and Hopping',15,null,248),
+('PP2',3,'5.1',null,'Paper Pleating',15,null,249),
+('PP2',3,'6.1',null,'Water play',20,null,250),
+('PP2',4,'1.1',null,'God the Creator',9,null,251),
+('PP2',4,'1.2',null,'Caring for God’s Creation',9,null,252),
+('PP2',4,'2.1',null,'Handling the Holy Bible',8,null,253),
+('PP2',4,'2.2',null,'Noah and the Boat',9,null,254),
+('PP2',4,'3.1',null,'The Birth of Jesus Christ',9,null,255),
+('PP2',4,'3.2',null,'Celebrating the Birth of Jesus',9,null,256),
+('PP2',4,'4.1',null,'Respect for Parents',9,null,257),
+('PP2',4,'4.2',null,'Responsibility',9,null,258),
+('PP2',4,'5.1',null,'A house of God',9,null,259),
+('PP2',4,'5.2',null,'Church Activities',10,null,260)
+on conflict (cls, area, code) do nothing;

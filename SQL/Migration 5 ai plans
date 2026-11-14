@@ -1,0 +1,69 @@
+-- migration-5-ai-plans.sql
+-- AI-suggested goals and individual questions, with teacher approval.
+-- Run once in the Supabase SQL Editor, AFTER migration-4-support-plans.sql. Safe to run again.
+
+-- ---------- goals can be drafts made by the AI ----------
+alter table learner_goals drop constraint if exists learner_goals_status_check;
+alter table learner_goals add constraint learner_goals_status_check
+  check (status in ('proposed','active','achieved','paused','dropped','rejected'));
+alter table learner_goals add column if not exists source text not null default 'teacher';
+alter table learner_goals drop constraint if exists learner_goals_source_check;
+alter table learner_goals add constraint learner_goals_source_check check (source in ('teacher','ai'));
+alter table learner_goals add column if not exists rationale text;
+alter table learner_goals add column if not exists approved_by uuid references staff(id);
+alter table learner_goals add column if not exists approved_at timestamptz;
+
+-- ---------- individual questions chosen for one child ----------
+-- These sit beside the common core questions. They are not part of the area scores,
+-- so scores stay comparable between children and between terms.
+create table if not exists learner_questions (
+  id uuid primary key default gen_random_uuid(),
+  learner_id uuid not null references learners(id) on delete cascade,
+  term_id bigint references terms(id),
+  area_index int not null check (area_index between 0 and 4),   -- position in the five learning areas
+  shown text,                                                   -- an emoji or short word shown to the child
+  prompt text not null,
+  look_for text,
+  reason text,                                                  -- why it was chosen, in plain words
+  adapted_for text,                                             -- need type or accommodation it was adapted for
+  status text not null default 'proposed' check (status in ('proposed','approved','rejected','retired')),
+  source text not null default 'ai' check (source in ('ai','teacher')),
+  created_by uuid references staff(id),
+  approved_by uuid references staff(id),
+  approved_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+-- Answers to individual questions. Only ever added, never changed.
+create table if not exists learner_question_records (
+  id uuid primary key default gen_random_uuid(),
+  question_id uuid not null references learner_questions(id) on delete cascade,
+  learner_id uuid not null references learners(id) on delete cascade,
+  term_id bigint references terms(id),
+  score text not null check (score in ('0','1','2','3','4','5','NA','DA')),
+  support_code text default 'R0',
+  comment text,
+  rater_id uuid references staff(id),
+  entered_at timestamptz not null default now()
+);
+
+create index if not exists learner_questions_learner on learner_questions(learner_id, status);
+create index if not exists lqr_question on learner_question_records(question_id, entered_at);
+
+alter table learner_questions enable row level security;
+alter table learner_question_records enable row level security;
+
+drop policy if exists lq_read on learner_questions;
+create policy lq_read on learner_questions for select to authenticated using (public.matan_is_staff());
+drop policy if exists lq_add on learner_questions;
+create policy lq_add on learner_questions for insert to authenticated
+  with check (public.matan_can_edit_learner(learner_id) and created_by = auth.uid());
+drop policy if exists lq_change on learner_questions;
+create policy lq_change on learner_questions for update to authenticated
+  using (public.matan_can_edit_learner(learner_id)) with check (public.matan_can_edit_learner(learner_id));
+
+drop policy if exists lqr_read on learner_question_records;
+create policy lqr_read on learner_question_records for select to authenticated using (public.matan_is_staff());
+drop policy if exists lqr_add on learner_question_records;
+create policy lqr_add on learner_question_records for insert to authenticated
+  with check (public.matan_can_edit_learner(learner_id) and rater_id = auth.uid());

@@ -1,1 +1,25 @@
-{"framework":null,"buildCommand":null,"outputDirectory":"."}
+{
+ "framework": null,
+ "buildCommand": null,
+ "outputDirectory": ".",
+ "functions": {
+  "api/ai-plan.js": {
+   "maxDuration": 30
+  },
+  "api/staff.js": {
+   "maxDuration": 15
+  },
+  "api/ai-tier.js": {
+   "maxDuration": 30
+  },
+  "api/ai-bank.js": {
+   "maxDuration": 40
+  },
+  "api/ai-note.js": {
+   "maxDuration": 30
+  },
+  "api/learners/[id]/insights.js": {
+   "maxDuration": 30
+  }
+ }
+}

@@ -1,0 +1,157 @@
+-- migration-6-playgroup-staff.sql
+-- Stage 1: Playgroup class, senior teacher role, staff dashboard, teacher attendance, attendance reasons.
+-- Run once in the Supabase SQL Editor, AFTER migration-4 and migration-5. Safe to run again.
+-- Assumes: classes(id, name, teacher_id), learning_areas(id, name), competencies(code, class_id, area_id, strand,
+-- sub_strand, description, curriculum_ref, source, created_by), attendance(learner_id, day, present).
+
+-- ---------- helper functions ----------
+create or replace function public.matan_is_senior() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from staff s where s.id = auth.uid() and s.role = 'senior');
+$$;
+-- Director or senior teacher.
+create or replace function public.matan_is_admin() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from staff s where s.id = auth.uid() and s.role in ('head','senior'));
+$$;
+-- The senior teacher can work in every class, like the director (but has no Teaching insights screen in the app).
+create or replace function public.matan_can_edit_learner(lid uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select public.matan_is_admin() or exists (
+    select 1 from learners l join classes c on c.id = l.class_id
+    where l.id = lid and c.teacher_id = auth.uid());
+$$;
+
+-- ---------- staff roles ----------
+alter table staff drop constraint if exists staff_role_check;
+alter table staff add constraint staff_role_check check (role in ('head','senior','teacher'));
+alter table staff add column if not exists phone text;
+alter table staff add column if not exists active boolean not null default true;
+
+-- Only the director changes staff and class teachers. (These add to your existing read policies; they do not switch row level security on.)
+drop policy if exists staff_head_write on staff;
+create policy staff_head_write on staff for all to authenticated
+  using (public.matan_is_head()) with check (public.matan_is_head());
+drop policy if exists classes_head_write on classes;
+create policy classes_head_write on classes for all to authenticated
+  using (public.matan_is_head()) with check (public.matan_is_head());
+
+-- ---------- Playgroup ----------
+insert into classes (name) select 'PG' where not exists (select 1 from classes where name = 'PG');
+insert into learning_areas (name) select 'Language and Early Literacy' where not exists (select 1 from learning_areas where name = 'Language and Early Literacy');
+insert into learning_areas (name) select 'Early Mathematical Activities' where not exists (select 1 from learning_areas where name = 'Early Mathematical Activities');
+insert into learning_areas (name) select 'Creative and Physical Activities' where not exists (select 1 from learning_areas where name = 'Creative and Physical Activities');
+insert into learning_areas (name) select 'Environmental Exploration' where not exists (select 1 from learning_areas where name = 'Environmental Exploration');
+insert into learning_areas (name) select 'Personal, Social and Values Education' where not exists (select 1 from learning_areas where name = 'Personal, Social and Values Education');
+
+-- Playgroup curriculum: 60 sub-strands (5 learning areas x 3 terms x 4), as competencies with no questions yet.
+-- Questions are added in the Question bank, or suggested by the AI in the next stage, and approved by a teacher.
+with src(area, code, strand, sub, term, lessons) as (values
+  ('Language and Early Literacy','PG-1.1.1','Listening and speaking','Names and greetings',1,8),
+  ('Language and Early Literacy','PG-1.1.2','Listening and speaking','Listening and simple directions',1,12),
+  ('Language and Early Literacy','PG-1.1.3','Pre-reading','Picture talk and book care',1,10),
+  ('Language and Early Literacy','PG-1.1.4','Pre-writing','Marks and movement',1,10),
+  ('Language and Early Literacy','PG-1.2.1','Listening and speaking','Vocabulary and describing',2,8),
+  ('Language and Early Literacy','PG-1.2.2','Listening and speaking','Stories and sequencing',2,12),
+  ('Language and Early Literacy','PG-1.2.3','Pre-reading','Rhyme and sound play',2,10),
+  ('Language and Early Literacy','PG-1.2.4','Pre-writing','Lines and shapes',2,10),
+  ('Language and Early Literacy','PG-1.3.1','Listening and speaking','Questions and conversation',3,8),
+  ('Language and Early Literacy','PG-1.3.2','Listening and speaking','Retelling and oral expression',3,12),
+  ('Language and Early Literacy','PG-1.3.3','Pre-reading','Print and sound awareness',3,10),
+  ('Language and Early Literacy','PG-1.3.4','Pre-writing','Representational drawing',3,10),
+  ('Early Mathematical Activities','PG-2.1.1','Number sense','Counting in play',1,8),
+  ('Early Mathematical Activities','PG-2.1.2','Number sense','Matching and sorting',1,12),
+  ('Early Mathematical Activities','PG-2.1.3','Geometry','Shapes around us',1,10),
+  ('Early Mathematical Activities','PG-2.1.4','Measurement','Big and small',1,10),
+  ('Early Mathematical Activities','PG-2.2.1','Number sense','Counting and quantities',2,8),
+  ('Early Mathematical Activities','PG-2.2.2','Number sense','More, fewer and equal',2,12),
+  ('Early Mathematical Activities','PG-2.2.3','Patterns','Repeating patterns',2,10),
+  ('Early Mathematical Activities','PG-2.2.4','Spatial awareness','Position and direction',2,10),
+  ('Early Mathematical Activities','PG-2.3.1','Number sense','Numeral and quantity links',3,8),
+  ('Early Mathematical Activities','PG-2.3.2','Mathematical reasoning','Problems in daily routines',3,12),
+  ('Early Mathematical Activities','PG-2.3.3','Geometry','Shape construction',3,10),
+  ('Early Mathematical Activities','PG-2.3.4','Measurement and patterns','Comparing and sequencing',3,10),
+  ('Creative and Physical Activities','PG-3.1.1','Art and expression','Colour and sensory art',1,8),
+  ('Creative and Physical Activities','PG-3.1.2','Music and movement','Songs and rhythm',1,12),
+  ('Creative and Physical Activities','PG-3.1.3','Gross motor','Balance and movement',1,10),
+  ('Creative and Physical Activities','PG-3.1.4','Fine motor','Hands and tools',1,10),
+  ('Creative and Physical Activities','PG-3.2.1','Art and expression','Mixing and making',2,8),
+  ('Creative and Physical Activities','PG-3.2.2','Music and movement','Sound patterns',2,12),
+  ('Creative and Physical Activities','PG-3.2.3','Gross motor','Throwing and catching',2,10),
+  ('Creative and Physical Activities','PG-3.2.4','Fine motor','Joining and modelling',2,10),
+  ('Creative and Physical Activities','PG-3.3.1','Art and expression','Representing ideas',3,8),
+  ('Creative and Physical Activities','PG-3.3.2','Music and movement','Perform and create',3,12),
+  ('Creative and Physical Activities','PG-3.3.3','Gross motor','Movement challenges',3,10),
+  ('Creative and Physical Activities','PG-3.3.4','Fine motor','Tool control and readiness',3,10),
+  ('Environmental Exploration','PG-4.1.1','Self and surroundings','My body and senses',1,8),
+  ('Environmental Exploration','PG-4.1.2','People and places','My school',1,12),
+  ('Environmental Exploration','PG-4.1.3','Living things','Plants and animals',1,10),
+  ('Environmental Exploration','PG-4.1.4','Weather','Daily weather',1,10),
+  ('Environmental Exploration','PG-4.2.1','People and community','Family and helpers',2,8),
+  ('Environmental Exploration','PG-4.2.2','Living things','Growing things',2,12),
+  ('Environmental Exploration','PG-4.2.3','Materials','Water and materials',2,10),
+  ('Environmental Exploration','PG-4.2.4','Environment','Keeping places clean',2,10),
+  ('Environmental Exploration','PG-4.3.1','Living things','Changes and life cycles',3,8),
+  ('Environmental Exploration','PG-4.3.2','People and places','Transport and journeys',3,12),
+  ('Environmental Exploration','PG-4.3.3','Materials and science','Exploring cause and effect',3,10),
+  ('Environmental Exploration','PG-4.3.4','Environment','Caring for nature',3,10),
+  ('Personal, Social and Values Education','PG-5.1.1','Self-awareness','Names and feelings',1,8),
+  ('Personal, Social and Values Education','PG-5.1.2','Relationships','Sharing and turn-taking',1,12),
+  ('Personal, Social and Values Education','PG-5.1.3','Self-care','Classroom routines',1,10),
+  ('Personal, Social and Values Education','PG-5.1.4','Values and belonging','Kindness and inclusion',1,10),
+  ('Personal, Social and Values Education','PG-5.2.1','Emotional literacy','Naming and coping',2,8),
+  ('Personal, Social and Values Education','PG-5.2.2','Relationships','Working together',2,12),
+  ('Personal, Social and Values Education','PG-5.2.3','Safety and health','Safe daily choices',2,10),
+  ('Personal, Social and Values Education','PG-5.2.4','Independence','Choosing and persisting',2,10),
+  ('Personal, Social and Values Education','PG-5.3.1','Identity and community','Belonging and differences',3,8),
+  ('Personal, Social and Values Education','PG-5.3.2','Relationships','Conflict and repair',3,12),
+  ('Personal, Social and Values Education','PG-5.3.3','Self-care','Growing independence',3,10),
+  ('Personal, Social and Values Education','PG-5.3.4','Readiness','Confidence for PP1',3,10)
+)
+insert into competencies (code, class_id, area_id, strand, sub_strand, description, curriculum_ref, source)
+select s.code, (select id from classes where name = 'PG'), (select id from learning_areas where name = s.area),
+       s.strand, s.sub, 'Term ' || s.term || ': ' || s.sub, 'Matan PG 2027 ' || substring(s.code from 4), 'curriculum'
+from src s
+where not exists (select 1 from competencies c where c.code = s.code);
+
+-- ---------- learner attendance: reasons and late arrivals ----------
+alter table attendance add column if not exists late boolean not null default false;
+alter table attendance add column if not exists reason text;
+
+-- ---------- teacher attendance ----------
+create table if not exists staff_attendance (
+  id uuid primary key default gen_random_uuid(),
+  staff_id uuid not null references staff(id) on delete cascade,
+  day date not null,
+  status text not null check (status in ('present','late','absent','leave')),
+  time_in text,
+  note text,
+  marked_by uuid references staff(id),
+  created_at timestamptz not null default now(),
+  unique (staff_id, day)
+);
+alter table staff_attendance enable row level security;
+-- Director and senior teacher see and mark everyone. A teacher sees only their own days.
+drop policy if exists sa_read on staff_attendance;
+create policy sa_read on staff_attendance for select to authenticated
+  using (public.matan_is_admin() or staff_id = auth.uid());
+drop policy if exists sa_write on staff_attendance;
+create policy sa_write on staff_attendance for all to authenticated
+  using (public.matan_is_admin()) with check (public.matan_is_admin());
+
+-- ---------- the senior teacher can work in every class ----------
+-- These add to the existing policies (policies are combined with "or"). They are skipped for tables that do not exist.
+do $$
+declare t text;
+begin
+  foreach t in array array['learners','guardians','attendance','question_variants','competencies','teacher_notes','follow_up_actions','parent_messages'] loop
+    if to_regclass('public.' || t) is not null then
+      execute format('drop policy if exists admin_all_%I on %I', t, t);
+      execute format('create policy admin_all_%I on %I for all to authenticated using (public.matan_is_admin()) with check (public.matan_is_admin())', t, t);
+    end if;
+  end loop;
+end $$;
+-- Assessment scores: the senior teacher scores as a teacher, under their own login.
+drop policy if exists admin_score_assessment on assessment_records;
+create policy admin_score_assessment on assessment_records for insert to authenticated
+  with check (public.matan_is_senior() and rater_id = auth.uid() and rater_role = 'teacher');
