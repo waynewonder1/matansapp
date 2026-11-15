@@ -393,6 +393,8 @@ function goalsPanel(l){
 }
 // Shown at the top of the assessment screen so the teacher sees how this child is supported.
 const needsOf=l=>((l.sup&&l.sup.needs)||[]).map(n=>n.need_type);
+const SIGHTQ=/\bread\b|\bsee\b|\bthis\b|\bthese\b|\bwhich\b|animal|look at|looks like|point to|show me|colou?r|shape|picture|draw|write|trace|match|copy|spell|letter|word\b|count the|how many|pattern|sort|arrange/i;
+const sightWarn=(l,t)=>isBlind(l)&&(SIGHTQ.test(t||"")||/\bthis\b|\bthese\b/.test(t||""))?`<div class="note watch" role="note" style="margin:10px 0 0"><b>This question depends on sight.</b> ${esc(l.name.split(" ")[0])} cannot read print or look at pictures. Say it aloud, use Braille or raised letters, or real objects to touch. If that is not possible, score it NA.</div>`:"";
 const isBlind=l=>needsOf(l).includes("visual")||!!(l.report&&NEEDRX.visual.test(l.report));
 const isSpecial=l=>{const t=l.tier&&l.tier.confirmed;return !!(l.hasPlan||(t&&t!=="A"))};
 // Tells the assessor how this child's disability changes the session, and whether individual questions exist yet.
@@ -966,7 +968,7 @@ function assessView(){
    <button class="primary" id="toprof">Open profile</button> ${nextL?`<button class="ghost" id="nextl">Call next: ${esc(nextL.name)}</button>`:""} <button class="ghost" id="toq">Back to class list</button></div>`;
   if(!qs.length)return head+tabs+accBanner(l)+indivBanner(l,A)+(isSpecial(l)?xqPanel(l,A,s):"")+`<div class="panel"><p class="muted" style="margin:0">There are no approved questions for ${AR(l.cls)[A].full} in ${l.cls} yet. Add some in the Question bank, or pick another area.</p></div>`+(isSpecial(l)?"":xqPanel(l,A,s));
   const q=qs[s.qi],g=s.g[A],v=s.v[A][s.qi]||"A",txt=qtext(q,v),saved=mineSaved(l,A),n=qs.length;
-  if(s.present)return `<div class="stage present"><div class="big">${q.s}</div>${q.st?"":`<p class="ask">${esc(txt)}</p>`}</div><button class="ghost" id="exitp">Back to grading</button>`;
+  if(s.present)return `<div class="stage present"><div class="big">${q.s}</div>${q.st?"":`<p class="ask">${esc(txt)}</p>${sightWarn(l,txt)}`}</div><button class="ghost" id="exitp">Back to grading</button>`;
   const idx=qs.map((_,i)=>i),graded=idx.filter(i=>g[i]!==undefined),missing=idx.filter(i=>g[i]===undefined),tn=graded.map(i=>g[i]).filter(num);
   const score=tn.length?Math.round(avg(tn)):null,sts={};
   qs.forEach((x,i)=>{if(x.st&&num(g[i]))(sts[x.st]=sts[x.st]||[]).push(g[i])});
@@ -1429,7 +1431,7 @@ function needsPrompt(l){
   const ks=suggestedNeeds(l);
   if(!ks.length){
     const have=needsOf(l),left=Object.keys(NEEDLBL).filter(k=>!have.includes(k));if(!left.length)return "";
-    return `<details class="panel" id="mneed"><summary><b>Record a need</b> <span class="muted">(blind, deaf, and so on)</span></summary>
+    return `<details class="panel" id="mneed" open><summary><b>Record a need</b> <span class="muted">(blind, deaf, and so on)</span></summary>
      <p class="muted" style="margin:6px 0">Use this when ${esc(l.name.split(" ")[0])} has a need that is not written in a doctor’s report yet. The AI then adapts the questions.</p>
      <select id="mn_sel">${left.map(k=>`<option value="${k}">${esc(NEEDLBL[k])}</option>`).join("")}</select>
      <button class="primary" id="mn_go">Record need</button></details>`;
@@ -1583,7 +1585,7 @@ function checkView(){
   const q=qs[s.qi],g=s.g[A],n=qs.length,scored=g.filter(x=>x!==undefined).length;
   return head+tabs+`<div class="stage"><p class="muted" style="margin:0 0 8px">${esc(AR(l.cls)[A].full)} · Question ${s.qi+1} of ${n}${q.hit?" · <span class=\"tag ok\">taught this year</span>":""}</p>
    ${q.st?`<p class="muted" style="margin:0 0 8px"><b>${esc(q.c)}</b> · ${esc(q.st)}${q.sub?" · "+esc(q.sub):""}</p>`:""}
-   ${isBlind(l)&&!s.pic?`<p class="muted" style="margin:0 0 8px"><b>Picture hidden.</b> Read the question aloud and use real objects ${fn} can touch. <button class="ghost" id="showpic">Show picture</button></p>`:`<div class="big">${q.s}</div>`}<p class="ask">${esc(q.a)}</p></div>
+   ${isBlind(l)&&!s.pic?`<p class="muted" style="margin:0 0 8px"><b>Picture hidden.</b> Read the question aloud and use real objects ${fn} can touch. <button class="ghost" id="showpic">Show picture</button></p>`:`<div class="big">${q.s}</div>`}<p class="ask">${esc(q.a)}</p>${sightWarn(l,q.a)}</div>
   <div class="panel"><p style="margin-top:0"><b>Look for:</b> ${esc(q.l)}</p>
    <div class="pick" role="group" aria-label="Score">${GR.map(x=>`<button class="${num(x)?"":"sm"}" data-v="${x}" aria-pressed="${g[s.qi]===x}">${x}</button>`).join("")}</div>
    <p class="rub muted">${g[s.qi]===undefined?"Choose a score from 0 to 5, or NA or DA.":num(g[s.qi])?`${g[s.qi]}: ${G[g[s.qi]]}`:`${g[s.qi]}: ${GL[g[s.qi]]}`}</p>
