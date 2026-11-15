@@ -64,7 +64,10 @@ Copy the sub-strand name exactly into "sub_strand". If no item has "taught": tru
 
 Use only what is given. Never name or guess a diagnosis, never give medical advice, never mention a score out of 5 in a goal or question.
 "need_types" and "accommodations" tell you how to adapt, so adapt the task itself:
-- visual: use real objects to touch, sounds and large high-contrast items instead of small pictures.
+- visual: the child may be blind, so assume they CANNOT SEE anything. Every question and goal must work through hearing, touch, smell,
+  taste or movement. Use real objects the child can hold, sounds, songs, spoken words and body movement. NEVER ask the child to look at,
+  see, watch, find or sort by colour, match by how things look, point to a picture or card, read, draw, colour or copy a shape from sight.
+  Put one of these touch or hearing emojis in "shown": 🤚 👂 🔊 🎵. Never put a picture of the task in "shown".
 - hearing: use pictures, gestures, demonstration and written or pictured prompts; the child may answer by pointing or signing.
 - physical: no need for fine hand control or walking; allow pointing, eye pointing or choosing between two things.
 - intellectual: one short step at a time, real objects, repeat the same wording, small goals.
@@ -109,22 +112,26 @@ async function gemini(payload) {
 }
 
 // Checks the model's answer and keeps only safe, well-shaped items.
-function cleanOutput(o) {
+// Words that only make sense for a child who can see. A child with a visual need must never be given them.
+const SEEING = /\b(look(?:s|ing)? at|see|sees|seeing|watch\w*|colou?r\w*|red|blue|green|yellow|orange|purple|pink|picture\w*|draw\w*|crayons?|scribbl\w*|doodl\w*|point(?:s|ing)? to the (?:picture|card)|show(?:s|ing)? (?:me|the child)|read(?:s|ing)? the (?:card|page|word)|written)\b/i;
+function cleanOutput(o, needs) {
+  const blind = list(needs).includes("visual");
   o = o && typeof o === "object" ? o : {};
   const goals = list(o.goals).slice(0, 3).map((g) => ({
     domain: DOMAINS.includes(g && g.domain) ? g.domain : "Learning skills",
     goal: clip(g && g.goal, 220), baseline: clip(g && g.baseline, 160), target: clip(g && g.target, 160),
     weeks: Math.min(16, Math.max(4, parseInt(g && g.weeks, 10) || 10)), reason: clip(g && g.reason, 200),
-  })).filter((g) => g.goal);
+  })).filter((g) => g.goal && !(blind && SEEING.test(g.goal + " " + g.baseline + " " + g.target)));
   const per = {};
   const questions = [];
   for (const q of list(o.questions)) {
     const a = q && q.area;
     const prompt = clip(q && q.prompt, 240);
     if (!Number.isInteger(a) || a < 0 || a > 4 || !prompt) continue;
+    if (blind && SEEING.test(prompt + " " + clip(q && q.look_for, 200))) continue;
     if ((per[a] = (per[a] || 0) + 1) > 2) continue;
     questions.push({
-      area: a, shown: clip(q.shown, 8) || "💬", prompt, look_for: clip(q.look_for, 200), reason: clip(q.reason, 200),
+      area: a, shown: blind ? (["🤚", "👂", "🔊", "🎵"].includes(clip(q.shown, 8)) ? clip(q.shown, 8) : "🤚") : (clip(q.shown, 8) || "💬"), prompt, look_for: clip(q.look_for, 200), reason: clip(q.reason, 200),
       adapted_for: NEEDS.includes(q.adapted_for) ? q.adapted_for : "",
       sub_strand: clip(q.sub_strand, 70),
     });
@@ -156,7 +163,8 @@ module.exports = async function handler(req, res) {
     if (!staff.ok || !staff.json.length) return send(403, { error: "This login is not set up as Matan staff." });
     const consent = await sb("/rest/v1/learner_consents?select=id&limit=1&kind=eq.gemini&withdrawn_on=is.null&learner_id=eq." + lid, token);
     if (!consent.ok || !consent.json.length) return send(403, { error: "No guardian consent for AI planning is recorded for this child." });
-    const out = cleanOutput(await gemini(cleanPayload(body.payload)));
+    const clean = cleanPayload(body.payload);
+    const out = cleanOutput(await gemini(clean), clean.need_types);
     if (!out.goals.length && !out.questions.length) return send(502, { error: "The AI did not give usable suggestions. Please try again." });
     return send(200, out);
   } catch (e) {

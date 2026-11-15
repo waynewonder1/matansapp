@@ -544,6 +544,7 @@ function bindTier(l){
   const guard=async f=>{if(S.saving)return;S.saving=true;try{await f()}catch(e){S.aiBusy=null;fail(e)}finally{S.saving=false}};
   const reload=async()=>{await loadSupportAll();await loadSupport(l);rr()};
   document.querySelectorAll("[data-addneed]").forEach(b=>b.onclick=()=>guard(async()=>{await addNeeds(l,[b.dataset.addneed]);S.err="";await reload()}));
+  on("mn_go",()=>{const k=$("mn_sel").value;if(!l.sup||!l.sup.profile){S.pendNeeds={id:l.id,keys:[k]};S.spedit=l.id;rr();return}guard(async()=>{await addNeeds(l,[k]);S.err="";await reload()})});
   on("needs_plan",()=>{S.pendNeeds={id:l.id,keys:suggestedNeeds(l)};S.spedit=l.id;rr()});
   on("t_decl_save",()=>guard(async()=>{const d=$("t_decl").value;await run(sb.from("learner_tiers").upsert({learner_id:l.id,declared:d},{onConflict:"learner_id"}));await reload()}));
   on("t_report_save",()=>guard(async()=>{const r=$("t_report").value.trim();await run(sb.from("learner_reports").upsert({learner_id:l.id,report:r,updated_by:ME.id,updated_at:new Date().toISOString()},{onConflict:"learner_id"}));S.err="";await reload()}));
@@ -611,7 +612,7 @@ const lastRec=(l,q)=>(l.aiqr||[]).filter(r=>r.question_id===q.id).pop();
 function aiPayload(l){
   const sp=l.sup||{},p=sp.profile,cur=l.cur||[];
   return {class:l.cls,age:l.age,new_learner:!l.scores.length,pathway:p?p.pathway:(l.pathway||null),
-    need_types:(sp.needs||[]).map(n=>n.need_type),accommodations:(sp.acc||[]).map(a=>a.accommodation),
+    need_types:uniq((sp.needs||[]).map(n=>n.need_type).concat(suggestedNeeds(l))),accommodations:uniq((sp.acc||[]).map(a=>a.accommodation).concat(suggestedNeeds(l).flatMap(k=>NEEDACC[k]||[]))),
     terms:l.scores.map((v,i)=>({term:l.labels[i],scores:Object.fromEntries(AREAS.map(a=>[a.full,v[a.k]]))})),
     this_term:cur.some(v=>v!==null)?Object.fromEntries(AREAS.map(a=>[a.full,cur[a.k]])):null,
     current_goals:(l.goals||[]).filter(g=>g.status==="active").map(g=>({domain:g.domain,goal:g.goal,latest_level:g.prog&&g.prog.length?g.prog[g.prog.length-1].level:null})),
@@ -648,6 +649,7 @@ async function ensureCurr(){if(COV_OK&&!CIDONE){try{await loadCurr()}catch(e){co
 // Asks the AI service for suggestions and saves them as drafts for the teacher to approve.
 async function requestAI(l){
   await ensureCurr();
+  try{await loadSupport(l)}catch(e){}  // so the doctor’s report and recorded needs are up to date, even for a child just added
   const {data}=await sb.auth.getSession();
   const r=await fetch((CFG.API_URL||"")+"/api/ai-plan",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+data.session.access_token},body:JSON.stringify({learner_id:l.id,payload:aiPayload(l)})});
   let j={};try{j=await r.json()}catch(e){}
@@ -667,6 +669,7 @@ function planPanel(l){
   const areaTag=q=>`<span class="tag">${esc(AR(l.cls)[q.area_index].n)}</span>${q.sub_strand?` <span class="muted">${esc(q.sub_strand)}</span>`:""}`;
   return `<div class="panel" id="aipanel"><h2>Goals and questions for ${fn} (AI)${MONTH_OK?" · "+esc(monthName()):""}</h2>
   <p class="muted">The AI looks at ${fn}’s scores over time, support needs and earlier answers, then suggests goals and extra questions that suit ${fn}. Only the class, age, scores, types of need and accommodations are sent. The name, notes, health note and guardian details are never sent. Nothing is used until a teacher approves it.</p>
+  ${suggestedNeeds(l).length?`<div class="note watch" role="note">The doctor’s report mentions <b>${suggestedNeeds(l).map(k=>esc(NEEDLBL[k])).join(", ")}</b>, which is not recorded in the Support plan yet. The AI is told about it anyway, so these questions are planned for it. Please record it above as well.</div>`:""}
   ${!ok?(can?`<div class="note tip"><label><input type="checkbox" id="ai_consent"> The guardian has signed the consent form for AI planning</label><br><button class="ghost" id="ai_consent_save" style="margin-top:6px">Record consent</button></div>`:`<p class="muted">The class teacher or director must record the guardian’s consent first.</p>`)
    :(can?`<button class="primary" id="ai_run" style="margin-top:0" ${busy?"disabled":""}>${busy?"Working on it…":(MONTH_OK?`Make ${monthName()} goals and questions`:(pg.length||pq.length||aq.length?"Suggest new goals and questions":"Suggest goals and questions"))}</button> <span class="muted" role="status">${busy?"This can take up to half a minute.":""}</span>`:"")}
   ${pg.length?`<h3 style="margin:14px 0 4px;font-size:1.05rem">Goals to review</h3>${pg.map(g=>`<div class="goal"><span class="tag">${esc(g.domain)}</span> <span class="tag warn">Waiting for approval</span>
@@ -1423,7 +1426,14 @@ async function addNeeds(l,keys){
 }
 function needsPrompt(l){
   if(!SUP_OK||!l.sup||!canEdit(l))return "";
-  const ks=suggestedNeeds(l);if(!ks.length)return "";
+  const ks=suggestedNeeds(l);
+  if(!ks.length){
+    const have=needsOf(l),left=Object.keys(NEEDLBL).filter(k=>!have.includes(k));if(!left.length)return "";
+    return `<details class="panel" id="mneed"><summary><b>Record a need</b> <span class="muted">(blind, deaf, and so on)</span></summary>
+     <p class="muted" style="margin:6px 0">Use this when ${esc(l.name.split(" ")[0])} has a need that is not written in a doctor’s report yet. The AI then adapts the questions.</p>
+     <select id="mn_sel">${left.map(k=>`<option value="${k}">${esc(NEEDLBL[k])}</option>`).join("")}</select>
+     <button class="primary" id="mn_go">Record need</button></details>`;
+  }
   const fn=esc(l.name.split(" ")[0]),acc=uniq(ks.flatMap(k=>NEEDACC[k]||[]));
   return `<div class="note watch" role="note" id="needsprompt"><b>${fn}’s doctor’s report mentions: ${ks.map(k=>esc(NEEDLBL[k])).join(", ")}.</b>
    That is not recorded in the Support plan yet. Until it is, the AI cannot adapt ${fn}’s questions.<br>
