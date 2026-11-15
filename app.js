@@ -392,6 +392,21 @@ function goalsPanel(l){
   ${!l.sup.profile?`<p class="muted">${canEdit(l)?"Add a support plan first. It records the guardian’s consent, and then goals can be added.":"Goals can be added once there is a support plan."}</p>`:can?(S.gadd?goalForm(l):'<button class="ghost" id="gadd" style="margin-top:8px">Add a goal</button>'):""}</div>`;
 }
 // Shown at the top of the assessment screen so the teacher sees how this child is supported.
+const needsOf=l=>((l.sup&&l.sup.needs)||[]).map(n=>n.need_type);
+const isBlind=l=>needsOf(l).includes("visual")||!!(l.report&&NEEDRX.visual.test(l.report));
+const isSpecial=l=>{const t=l.tier&&l.tier.confirmed;return !!(l.hasPlan||(t&&t!=="A"))};
+// Tells the assessor how this child's disability changes the session, and whether individual questions exist yet.
+function indivBanner(l,A){
+  if(!SUP_OK||!l.sup||!isSpecial(l))return "";
+  const fn=esc(l.name.split(" ")[0]),t=l.tier&&l.tier.confirmed,needs=needsOf(l);
+  const n=(l.aiq||[]).filter(q=>q.status==="approved"&&q.area_index===A&&(!MONTH_OK||!q.month||q.month===monthFirst())).length;
+  let h="";
+  if(isBlind(l))h+=`<div class="note watch" role="note"><b>${fn} has a visual need.</b> Do not show the pictures. Read each question aloud, use real objects ${fn} can touch, and accept spoken or touch answers. Tick “Task was adapted for this child” and choose a support level.</div>`;
+  if(!needs.length&&suggestedNeeds(l).length)h+=`<div class="note watch" role="note"><b>${fn}’s doctor’s report mentions ${suggestedNeeds(l).map(k=>NEEDLBL[k]).join(", ")}, but no support need is recorded yet.</b> Open ${fn}’s profile and press “Record … need” so the questions and pictures adapt.</div>`;
+  else if(!needs.length&&t&&t!=="A")h+=`<div class="note tip" role="note">No support need is recorded for ${fn} yet (for example Visual or Hearing). The AI adapts questions from the recorded needs, not from the doctor’s report, so add the need in the Support plan first.</div>`;
+  if(!n)h+=`<div class="note tip" role="note">There are no approved individual questions for ${fn} in this area yet, so only the common questions show. <button class="ghost" id="goplan" style="margin-left:6px">Open ${fn}’s profile to make them</button></div>`;
+  return h;
+}
 function accBanner(l){
   if(!SUP_OK||!l.sup||!l.sup.profile)return "";
   const fn=esc(l.name.split(" ")[0]),p=l.sup.profile,acc=l.sup.acc.map(a=>esc(a.accommodation));
@@ -413,6 +428,7 @@ function bindSupport(l){
         await run(sb.from("learner_consents").insert({learner_id:l.id,kind:"support_needs",granted_by:v("sp_gname")||l.guardian||null,recorded_by:ME.id}));
       }
       await run(sb.from("learner_support_profiles").insert({learner_id:l.id,...prof,created_by:ME.id,updated_by:ME.id}));
+      if(S.pendNeeds&&S.pendNeeds.id===l.id){await addNeeds(l,S.pendNeeds.keys);S.pendNeeds=null}
     }else await run(sb.from("learner_support_profiles").update({...prof,updated_by:ME.id,updated_at:stamp()}).eq("learner_id",l.id));
     const h=$("sp_health").value.trim();
     if(h||sp.health)await run(sb.from("learner_health_notes").upsert({learner_id:l.id,note:h||null,updated_by:ME.id,updated_at:stamp()},{onConflict:"learner_id"}));
@@ -527,6 +543,8 @@ function bindTier(l){
   const on=(id,f)=>{const e=$(id);if(e)e.onclick=f};
   const guard=async f=>{if(S.saving)return;S.saving=true;try{await f()}catch(e){S.aiBusy=null;fail(e)}finally{S.saving=false}};
   const reload=async()=>{await loadSupportAll();await loadSupport(l);rr()};
+  document.querySelectorAll("[data-addneed]").forEach(b=>b.onclick=()=>guard(async()=>{await addNeeds(l,[b.dataset.addneed]);S.err="";await reload()}));
+  on("needs_plan",()=>{S.pendNeeds={id:l.id,keys:suggestedNeeds(l)};S.spedit=l.id;rr()});
   on("t_decl_save",()=>guard(async()=>{const d=$("t_decl").value;await run(sb.from("learner_tiers").upsert({learner_id:l.id,declared:d},{onConflict:"learner_id"}));await reload()}));
   on("t_report_save",()=>guard(async()=>{const r=$("t_report").value.trim();await run(sb.from("learner_reports").upsert({learner_id:l.id,report:r,updated_by:ME.id,updated_at:new Date().toISOString()},{onConflict:"learner_id"}));S.err="";await reload()}));
   on("t_confirm",()=>guard(async()=>{await confirmTier(l,$("t_pick").value);S.err="";await reload()}));
@@ -699,7 +717,7 @@ function xqPanel(l,A,s){
   const open=list.filter(q=>!saved(q));
   return `<div class="panel" id="xqpanel"><h2>Questions chosen for ${fn}</h2>
   <p class="muted" style="margin-top:0">Chosen for ${fn}’s strengths, gaps and support needs, and approved by a teacher. They add to the common questions above and are not part of the area score.</p>
-  ${list.map(q=>{const sv=saved(q),cur=st[q.id]||{};return `<div class="goal"><p style="margin:0">${esc(q.shown||"")} <b>${esc(q.prompt)}</b></p>
+  ${list.map(q=>{const sv=saved(q),cur=st[q.id]||{};return `<div class="goal"><p style="margin:0">${isBlind(l)?"":esc(q.shown||"")} <b>${esc(q.prompt)}</b></p>
    <p class="muted" style="margin:4px 0">${q.look_for?"Look for: "+esc(q.look_for):""}${q.adapted_for?` · Adapted: ${esc(NEEDLBL[q.adapted_for]||q.adapted_for)}`:""}</p>
    ${sv?`<p class="muted" style="margin:0">Saved: ${esc(sv.score)}${sv.comment?" · "+esc(sv.comment):""}</p>`
     :(can?`<div class="row2"><label class="muted">Score<br><select data-xq="${q.id}"><option value="">Choose a score</option>${GR.map(x=>`<option value="${x}" ${String(cur.v)===String(x)?"selected":""}>${num(x)?x+" · "+G[x]:x+" · "+GL[x]}</option>`).join("")}</select></label>
@@ -842,6 +860,7 @@ function profileView(){
   <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Term</th>${AR(l.cls).map(a=>`<th>${a.n}</th>`).join("")}<th>Avg</th></tr></thead><tbody>${l.scores.map((s,i)=>`<tr><td>${l.labels[i]}</td>${s.map(v=>`<td>${cell(v)}</td>`).join("")}<td>${f1(avg(s))}</td></tr>`).join("")}${l.cur.some(v=>v!==null)&&!l.labels.includes(CUR)?`<tr style="opacity:.75"><td>${esc(CUR)} (in progress)</td>${l.cur.map(v=>`<td>${v!==null?cell(v):"—"}</td>`).join("")}<td>—</td></tr>`:""}</tbody></table></div></div>`:`<div class="panel"><p class="muted" style="margin:0">No completed term yet, so there are no scores or chart to show.</p></div>`}
   <div class="panel"><h2>Trends and suggestions</h2>${insights(l).map(o=>`<div class="note ${o.t}">${o.x}</div>`).join("")}
    <p class="muted">These suggestions come from simple rules for now. An AI model will write more personal ones once it is connected.</p></div>
+  ${needsPrompt(l)}
   ${checksPanel(l)}
   ${aiPanel(l)}
   ${tierPanel(l)}
@@ -927,7 +946,7 @@ function queueView(){
 }
 async function begin(id){
   const l=byId(id);
-  try{if(!l.loaded)await loadRecords(l)}catch(e){return fail(e)}
+  try{if(!l.loaded)await loadRecords(l);if(SUP_OK&&!l.sup)await loadSupport(l)}catch(e){return fail(e)}
   const a=[0,1,2,3,4].find(i=>!mineSaved(l,i)),m=()=>[[],[],[],[],[]];
   if(a===undefined){S.sel=id;S.view="profile";render();return}
   S.sess={id,area:a,qi:0,ad:m(),g:m(),n:m(),sc:m(),v:m(),present:false,finished:false,msg:""};S.view="assess";S.err="";render();
@@ -942,18 +961,18 @@ function assessView(){
   if(s.finished)return `<div class="panel"><div class="who"><div style="display:flex;gap:12px;align-items:center">${av(l,56)}<h2>${esc(l.name)} is done</h2></div></div>
    <p>All five areas are saved for ${esc(fn)} for ${CUR}.</p>
    <button class="primary" id="toprof">Open profile</button> ${nextL?`<button class="ghost" id="nextl">Call next: ${esc(nextL.name)}</button>`:""} <button class="ghost" id="toq">Back to class list</button></div>`;
-  if(!qs.length)return head+tabs+accBanner(l)+`<div class="panel"><p class="muted" style="margin:0">There are no approved questions for ${AR(l.cls)[A].full} in ${l.cls} yet. Add some in the Question bank, or pick another area.</p></div>`+xqPanel(l,A,s);
+  if(!qs.length)return head+tabs+accBanner(l)+indivBanner(l,A)+(isSpecial(l)?xqPanel(l,A,s):"")+`<div class="panel"><p class="muted" style="margin:0">There are no approved questions for ${AR(l.cls)[A].full} in ${l.cls} yet. Add some in the Question bank, or pick another area.</p></div>`+(isSpecial(l)?"":xqPanel(l,A,s));
   const q=qs[s.qi],g=s.g[A],v=s.v[A][s.qi]||"A",txt=qtext(q,v),saved=mineSaved(l,A),n=qs.length;
   if(s.present)return `<div class="stage present"><div class="big">${q.s}</div>${q.st?"":`<p class="ask">${esc(txt)}</p>`}</div><button class="ghost" id="exitp">Back to grading</button>`;
   const idx=qs.map((_,i)=>i),graded=idx.filter(i=>g[i]!==undefined),missing=idx.filter(i=>g[i]===undefined),tn=graded.map(i=>g[i]).filter(num);
   const score=tn.length?Math.round(avg(tn)):null,sts={};
   qs.forEach((x,i)=>{if(x.st&&num(g[i]))(sts[x.st]=sts[x.st]||[]).push(g[i])});
-  return head+tabs+accBanner(l)+`
-  <div class="stage"><p class="muted" style="margin:0 0 8px">${AR(l.cls)[A].full} · Question ${s.qi+1} of ${n} · ${q.src}</p>
+  return head+tabs+accBanner(l)+indivBanner(l,A)+(isSpecial(l)?xqPanel(l,A,s):"")+`
+  <div class="stage">${isSpecial(l)?`<p class="muted" style="margin:0 0 8px"><b>Common questions</b> (adapt them for ${esc(fn)} as needed)</p>`:""}<p class="muted" style="margin:0 0 8px">${AR(l.cls)[A].full} · Question ${s.qi+1} of ${n} · ${q.src}</p>
    ${q.st?`<p class="muted" style="margin:0 0 8px"><b>${esc(q.c)}</b> · ${esc(q.st)}${q.sub?" · "+esc(q.sub):""}${q.ref?" · "+esc(q.ref):""}</p>`:""}
-   <div class="big">${q.s}</div><p class="ask">${esc(txt)}</p>
+   ${isBlind(l)&&!s.pic?`<p class="muted" style="margin:0 0 8px"><b>Picture hidden.</b> Read the question aloud and use real objects ${esc(fn)} can touch. <button class="ghost" id="showpic">Show picture</button></p>`:`<div class="big">${q.s}</div>`}<p class="ask">${esc(txt)}</p>
    ${q.b?`<p style="margin:14px 0 0"><button class="chip" data-var="A" aria-pressed="${v==="A"}">Question A</button> <button class="chip" data-var="B" aria-pressed="${v==="B"}">Question B</button></p>`:""}
-   <p style="margin-top:14px"><button class="ghost" id="present">Show full screen to learner</button></p></div>
+   ${isBlind(l)?"":`<p style="margin-top:14px"><button class="ghost" id="present">Show full screen to learner</button></p>`}</div>
   <div class="panel"><p style="margin-top:0"><b>Look for:</b> ${esc(q.l)}</p>
    <p class="muted" style="margin:0 0 6px"><b>${who} score</b>. Your score is saved under your own login. The ${ME.role==="head"?"teacher":"director"} scores separately.</p>
    <div class="pick" role="group" aria-label="${who} score">${GR.map(x=>`<button class="${num(x)?"":"sm"}" data-v="${x}" aria-pressed="${g[s.qi]===x}">${x}</button>`).join("")}</div>
@@ -967,7 +986,7 @@ function assessView(){
      ${Object.keys(sts).length&&ME.role!=="head"?`<p class="muted" style="margin:0 0 6px">By strand: ${Object.entries(sts).map(([k,x])=>`${k} ${f1(avg(x))}`).join(" · ")}</p>`:""}
      ${s.msg?`<div class="note watch">${esc(s.msg)}</div>`:""}
      <p class="muted" style="margin:0 0 6px">Every question needs a score, or NA if you did not ask it. When you press the button, your scores for this area are saved and cannot be changed, only corrected later.</p>
-     <button class="primary" id="done" style="margin-top:0">Done assessing ${AR(l.cls)[A].n}</button>`}</div>`+xqPanel(l,A,s);
+     <button class="primary" id="done" style="margin-top:0">Done assessing ${AR(l.cls)[A].n}</button>`}</div>`+(isSpecial(l)?"":xqPanel(l,A,s));
 }
 async function finishArea(l,s,A){
   const qs=QA(l.cls,A);
@@ -984,8 +1003,9 @@ function bindAssess(){
   const on=(id,f)=>{const e=$(id);if(e)e.onclick=f};
   on("toq",()=>{S.view="queue";S.sess=null;render()});
   on("toprof",()=>{S.sel=l.id;S.view="profile";S.sess=null;render()});
+  on("goplan",()=>{S.sel=l.id;S.view="profile";S.sess=null;render()});
   on("nextl",()=>{const n=L.find(x=>x.cls===l.cls&&x.id!==l.id&&!done(x));begin(n.id)});
-  on("present",()=>{s.present=true;render()});on("exitp",()=>{s.present=false;render()});
+  on("showpic",()=>{s.pic=true;rr()});on("present",()=>{s.present=true;render()});on("exitp",()=>{s.present=false;render()});
   on("prevq",()=>{s.qi--;rr()});on("nextq",()=>{s.qi++;rr()});
   const qn=$("qn");if(qn)qn.oninput=()=>{s.n[A][s.qi]=qn.value};
   const adp=$("adp");if(adp)adp.onchange=()=>{s.ad[A][s.qi]=adp.checked};
@@ -1379,6 +1399,38 @@ function bindStaff(){
     catch(e){fail(e)}finally{S.saving=false}});
 }
 
+/* ---------- needs found in the doctor's report ---------- */
+// The AI adapts questions from the RECORDED needs. This turns what the doctor's report says into recorded needs with one click.
+// The keyword search below runs only in the browser, on text the viewer can already read. Nothing is sent anywhere.
+const NEEDRX={visual:/\b(blind\w*|visual(?:ly)? impair\w*|low vision|partial(?:ly)? sighted|vision (?:loss|impair\w*)|sight loss)\b/i,
+ hearing:/\b(deaf\w*|hearing (?:loss|impair\w*)|hard of hearing)\b/i,
+ physical:/\b(cerebral palsy|wheelchair|physical(?:ly)? (?:disab\w*|impair\w*)|mobility|paraly\w*)\b/i,
+ speech_language:/\b(speech|stammer\w*|stutter\w*|non-?verbal|language delay)\b/i,
+ intellectual:/\b(intellectual|down(?:'s)? syndrome|developmental delay|learning disab\w*)\b/i};
+const NEEDACC={visual:["Pre-Braille or Braille materials","Short, one-step instructions"],hearing:["Kenyan Sign Language","Seat near the front"],physical:["Extra time","Assistive device in use"],speech_language:["Picture or object cues","Short, one-step instructions"],intellectual:["Short, one-step instructions","Extra time"]};
+function suggestedNeeds(l){
+  const have=needsOf(l),out=new Set(),rep=l.report||"";
+  Object.entries(NEEDRX).forEach(([k,rx])=>{if(rx.test(rep))out.add(k)});
+  const m=((l.tier&&l.tier.reason)||"").match(/Possible needs: ([^.]*)\./);
+  if(m)m[1].split(",").map(x=>x.trim()).forEach(lb=>{const k=Object.keys(NEEDLBL).find(k=>NEEDLBL[k]===lb);if(k&&k!=="other")out.add(k)});
+  return [...out].filter(k=>!have.includes(k));
+}
+async function addNeeds(l,keys){
+  for(const k of keys){
+    await run(sb.from("learner_needs").insert({learner_id:l.id,need_type:k,detail:null,source:"Doctor’s report, recorded by "+(STAFF[ME.id]||"staff"),created_by:ME.id}));
+    for(const a of NEEDACC[k]||[])await run(sb.from("learner_accommodations").upsert({learner_id:l.id,accommodation:a,applies_to:"both",active:true,created_by:ME.id},{onConflict:"learner_id,accommodation"}));
+  }
+}
+function needsPrompt(l){
+  if(!SUP_OK||!l.sup||!canEdit(l))return "";
+  const ks=suggestedNeeds(l);if(!ks.length)return "";
+  const fn=esc(l.name.split(" ")[0]),acc=uniq(ks.flatMap(k=>NEEDACC[k]||[]));
+  return `<div class="note watch" role="note" id="needsprompt"><b>${fn}’s doctor’s report mentions: ${ks.map(k=>esc(NEEDLBL[k])).join(", ")}.</b>
+   That is not recorded in the Support plan yet. Until it is, the AI cannot adapt ${fn}’s questions.<br>
+   ${l.sup.profile?ks.map(k=>`<button class="primary" data-addneed="${k}" style="margin:8px 8px 0 0">Record ${esc(NEEDLBL[k])} need</button>`).join(""):`<button class="primary" id="needs_plan" style="margin:8px 0 0">Add the support plan first</button> <span class="muted">It needs the guardian’s signed consent. The needs are recorded when you save it.</span>`}
+   <br><span class="muted">Recording a need also turns on these accommodations, which you can change in the Support plan: ${acc.map(esc).join(", ")}.</span></div>`;
+}
+
 /* ---------- Stage 3: curriculum tick-off, small checks, report cards ---------- */
 // End-of-term exams (assessment_records) are the ONLY thing that feeds the graph, the trend and the report card.
 // Small checks are stored in check_records, so they can never move the graph.
@@ -1521,7 +1573,7 @@ function checkView(){
   const q=qs[s.qi],g=s.g[A],n=qs.length,scored=g.filter(x=>x!==undefined).length;
   return head+tabs+`<div class="stage"><p class="muted" style="margin:0 0 8px">${esc(AR(l.cls)[A].full)} · Question ${s.qi+1} of ${n}${q.hit?" · <span class=\"tag ok\">taught this year</span>":""}</p>
    ${q.st?`<p class="muted" style="margin:0 0 8px"><b>${esc(q.c)}</b> · ${esc(q.st)}${q.sub?" · "+esc(q.sub):""}</p>`:""}
-   <div class="big">${q.s}</div><p class="ask">${esc(q.a)}</p></div>
+   ${isBlind(l)&&!s.pic?`<p class="muted" style="margin:0 0 8px"><b>Picture hidden.</b> Read the question aloud and use real objects ${fn} can touch. <button class="ghost" id="showpic">Show picture</button></p>`:`<div class="big">${q.s}</div>`}<p class="ask">${esc(q.a)}</p></div>
   <div class="panel"><p style="margin-top:0"><b>Look for:</b> ${esc(q.l)}</p>
    <div class="pick" role="group" aria-label="Score">${GR.map(x=>`<button class="${num(x)?"":"sm"}" data-v="${x}" aria-pressed="${g[s.qi]===x}">${x}</button>`).join("")}</div>
    <p class="rub muted">${g[s.qi]===undefined?"Choose a score from 0 to 5, or NA or DA.":num(g[s.qi])?`${g[s.qi]}: ${G[g[s.qi]]}`:`${g[s.qi]}: ${GL[g[s.qi]]}`}</p>
@@ -1545,6 +1597,7 @@ function bindCheck(){
       await loadChecks(l);d.saved=true;S.err="";rr();
     }catch(e){fail(e)}finally{S.saving=false}});
   if(s.done)return;
+  on("showpic",()=>{s.pic=true;rr()});
   on("prevq",()=>{s.qi--;rr()});on("nextq",()=>{s.qi++;rr()});
   const qn=$("qn");if(qn)qn.oninput=()=>{s.n[A][s.qi]=qn.value};
   const sc=$("sc");if(sc)sc.onchange=()=>{s.sc[A][s.qi]=sc.value};
