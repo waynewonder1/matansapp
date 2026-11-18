@@ -96,10 +96,13 @@ async function fetchAll(table,cols,order){
 }
 
 /* ---------- loading data ---------- */
+// TOUCH_OK: migration 9 adds a touch or spoken version of each question for blind learners.
+let TOUCH_OK=false;
 async function loadQuestions(){
+  const vcols="id,competency_id,variant,shown,prompt,source,status,created_by";
   const [co,va]=await Promise.all([
     fetchAll("competencies","id,code,class_id,area_id,strand,sub_strand,description,curriculum_ref,source,created_by","id"),
-    fetchAll("question_variants","id,competency_id,variant,shown,prompt,source,status,created_by","created_at")]);
+    fetchAll("question_variants",vcols+",touch,touch_status","created_at").then(r=>{TOUCH_OK=true;return r},()=>{TOUCH_OK=false;return fetchAll("question_variants",vcols,"created_at")})]);
   Q=emptyQ();NOQ=emptyQ();
   co.forEach(c=>{
     const cls=CLASSID[c.class_id],ai=AREAIDX[c.area_id];
@@ -110,7 +113,8 @@ async function loadQuestions(){
     const ref=c.curriculum_ref||"";
     Q[cls][ai].push({id:c.id,c:c.code,st:c.strand||"",sub:c.sub_strand||"",s:A.shown||"💬",a:A.prompt,b:B?B.prompt:undefined,l:c.description,ref,
       src:A.source==="teacher"?"Teacher":(/^Sample/.test(ref)?"Curriculum (sample)":/^KICD 2024/.test(ref)?"Curriculum (KICD 2024)":"Curriculum (adapted)"),
-      ok:A.status==="approved",va:A.id,vb:B?B.id:null,by:A.created_by});
+      ok:A.status==="approved",va:A.id,vb:B?B.id:null,by:A.created_by,
+      t:A.touch&&A.touch_status==="approved"?A.touch:"",tp:A.touch&&A.touch_status!=="approved"?A.touch:""});
   });
 }
 async function loadScores(only){
@@ -396,6 +400,17 @@ const needsOf=l=>((l.sup&&l.sup.needs)||[]).map(n=>n.need_type);
 const SIGHTQ=/\bread\b|\bsee\b|\bthis\b|\bthese\b|\bwhich\b|animal|look at|looks like|point to|show me|colou?r|shape|picture|draw|write|trace|match|copy|spell|letter|word\b|count the|how many|pattern|sort|arrange/i;
 const sightWarn=(l,t)=>isBlind(l)&&(SIGHTQ.test(t||"")||/\bthis\b|\bthese\b/.test(t||""))?`<div class="note watch" role="note" style="margin:10px 0 0"><b>This question depends on sight.</b> ${esc(l.name.split(" ")[0])} cannot read print or look at pictures. Say it aloud, use Braille or raised letters, or real objects to touch. If that is not possible, score it NA.</div>`:"";
 const isBlind=l=>needsOf(l).includes("visual")||!!(l.report&&NEEDRX.visual.test(l.report));
+// Stricter than SIGHTQ: questions a blind child cannot do as written (print, pictures, colour, "this" on the screen).
+const NEEDSIGHT=/\bread\b|\bsee\b|look at|looks like|point to|show me|picture|colou?r|\bdraw|\bwrite|trace|\bcopy|\bthis\b|\bthese\b|on the screen/i;
+const needsSight=q=>NEEDSIGHT.test(q.a||"");
+// What to ask: the approved touch version for a blind learner, otherwise question A or B.
+const askText=(l,q,v)=>isBlind(l)&&q.t?q.t:qtext(q,v);
+// A blind learner gets NA ahead of time on a sight question with no touch version. The teacher can still change it.
+const preNA=(l,qs,g,au)=>{if(isBlind(l))qs.forEach((q,i)=>{if(!q.t&&needsSight(q)&&g[i]===undefined){g[i]="NA";au[i]=1}})};
+const blindNote=(l,q,g,au,i)=>{if(!isBlind(l))return "";const fn=esc(l.name.split(" ")[0]);
+  if(q.t)return `<div class="note good" role="note" style="margin:10px 0 0"><b>Touch version for ${fn}.</b> This is the approved version for blind learners. Use real objects ${fn} can hold, and accept spoken or touch answers.</div>`;
+  if(au[i]&&g[i]==="NA")return `<div class="note watch" role="note" style="margin:10px 0 0"><b>Scored NA automatically.</b> This question needs sight and has no touch version yet, so it does not count against ${fn}. If you adapted it, for example with real objects, choose a score instead.${isAdmin()&&TOUCH_OK?" You can add a touch version in the Question bank.":""}</div>`;
+  return sightWarn(l,q.a)};
 const isSpecial=l=>{const t=l.tier&&l.tier.confirmed;return !!(l.hasPlan||(t&&t!=="A"))};
 // Tells the assessor how this child's disability changes the session, and whether individual questions exist yet.
 function indivBanner(l,A){
@@ -601,8 +616,22 @@ async function draftBank(c,ba){
   const r=await fetch((CFG.API_URL||"")+"/api/ai-bank",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+data.session.access_token},body:JSON.stringify({class:c,area:AR(c)[ba].full,items})});
   let j={};try{j=await r.json()}catch(e){}
   if(!r.ok)throw new Error(j.error||("The AI service did not answer ("+r.status+"). Check that api/ai-bank.js is deployed on Vercel."));
-  await run(sb.from("question_variants").insert(j.questions.map(q=>({competency_id:q.id,variant:"A",shown:q.shown,prompt:q.prompt,source:"curriculum",status:"pending",created_by:ME.id}))));
+  await run(sb.from("question_variants").insert(j.questions.map(q=>({competency_id:q.id,variant:"A",shown:q.shown,prompt:q.prompt,source:"curriculum",status:"pending",created_by:ME.id,
+    ...(TOUCH_OK&&q.touch?{touch:q.touch,touch_status:"pending"}:{})}))));
   return j.questions.length;
+}
+// Sight questions that still need a touch version. Only the question text goes to the AI, never a child's details.
+const noTouch=(c,ba)=>Q[c][ba].filter(q=>needsSight(q)&&!q.t&&!q.tp);
+async function draftTouch(c,ba){
+  const items=noTouch(c,ba).slice(0,10).map(q=>({id:q.id,prompt:q.a,look_for:q.l}));
+  if(!items.length)return 0;
+  const {data}=await sb.auth.getSession();
+  const r=await fetch((CFG.API_URL||"")+"/api/ai-bank",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+data.session.access_token},body:JSON.stringify({mode:"touch",class:c,area:AR(c)[ba].full,items})});
+  let j={};try{j=await r.json()}catch(e){}
+  if(!r.ok)throw new Error(j.error||("The AI service did not answer ("+r.status+"). Check that api/ai-bank.js is deployed on Vercel."));
+  const va={};Q[c][ba].forEach(q=>va[q.id]=q.va);
+  await Promise.all((j.touch||[]).filter(x=>va[x.id]).map(x=>run(sb.from("question_variants").update({touch:x.touch,touch_status:"pending"}).eq("id",va[x.id]))));
+  return (j.touch||[]).length;
 }
 
 
@@ -967,7 +996,8 @@ function assessView(){
    <p>All five areas are saved for ${esc(fn)} for ${CUR}.</p>
    <button class="primary" id="toprof">Open profile</button> ${nextL?`<button class="ghost" id="nextl">Call next: ${esc(nextL.name)}</button>`:""} <button class="ghost" id="toq">Back to class list</button></div>`;
   if(!qs.length)return head+tabs+accBanner(l)+indivBanner(l,A)+(isSpecial(l)?xqPanel(l,A,s):"")+`<div class="panel"><p class="muted" style="margin:0">There are no approved questions for ${AR(l.cls)[A].full} in ${l.cls} yet. Add some in the Question bank, or pick another area.</p></div>`+(isSpecial(l)?"":xqPanel(l,A,s));
-  const q=qs[s.qi],g=s.g[A],v=s.v[A][s.qi]||"A",txt=qtext(q,v),saved=mineSaved(l,A),n=qs.length;
+  const q=qs[s.qi],g=s.g[A],au=((s.au=s.au||{})[A]=s.au[A]||{}),v=s.v[A][s.qi]||"A",txt=askText(l,q,v),saved=mineSaved(l,A),n=qs.length;
+  if(!saved)preNA(l,qs,g,au);
   if(s.present)return `<div class="stage present"><div class="big">${q.s}</div>${q.st?"":`<p class="ask">${esc(txt)}</p>${sightWarn(l,txt)}`}</div><button class="ghost" id="exitp">Back to grading</button>`;
   const idx=qs.map((_,i)=>i),graded=idx.filter(i=>g[i]!==undefined),missing=idx.filter(i=>g[i]===undefined),tn=graded.map(i=>g[i]).filter(num);
   const score=tn.length?Math.round(avg(tn)):null,sts={};
@@ -975,8 +1005,8 @@ function assessView(){
   return head+tabs+accBanner(l)+indivBanner(l,A)+(isSpecial(l)?xqPanel(l,A,s):"")+`
   <div class="stage">${isSpecial(l)?`<p class="muted" style="margin:0 0 8px"><b>Common questions</b> (adapt them for ${esc(fn)} as needed)</p>`:""}<p class="muted" style="margin:0 0 8px">${AR(l.cls)[A].full} · Question ${s.qi+1} of ${n} · ${q.src}</p>
    ${q.st?`<p class="muted" style="margin:0 0 8px"><b>${esc(q.c)}</b> · ${esc(q.st)}${q.sub?" · "+esc(q.sub):""}${q.ref?" · "+esc(q.ref):""}</p>`:""}
-   ${isBlind(l)&&!s.pic?`<p class="muted" style="margin:0 0 8px"><b>Picture hidden.</b> Read the question aloud and use real objects ${esc(fn)} can touch. <button class="ghost" id="showpic">Show picture</button></p>`:`<div class="big">${q.s}</div>`}<p class="ask">${esc(txt)}</p>
-   ${q.b?`<p style="margin:14px 0 0"><button class="chip" data-var="A" aria-pressed="${v==="A"}">Question A</button> <button class="chip" data-var="B" aria-pressed="${v==="B"}">Question B</button></p>`:""}
+   ${isBlind(l)&&!s.pic?`<p class="muted" style="margin:0 0 8px"><b>Picture hidden.</b> Read the question aloud and use real objects ${esc(fn)} can touch. <button class="ghost" id="showpic">Show picture</button></p>`:`<div class="big">${q.s}</div>`}<p class="ask">${esc(txt)}</p>${blindNote(l,q,g,au,s.qi)}
+   ${q.b&&!(isBlind(l)&&q.t)?`<p style="margin:14px 0 0"><button class="chip" data-var="A" aria-pressed="${v==="A"}">Question A</button> <button class="chip" data-var="B" aria-pressed="${v==="B"}">Question B</button></p>`:""}
    ${isBlind(l)?"":`<p style="margin-top:14px"><button class="ghost" id="present">Show full screen to learner</button></p>`}</div>
   <div class="panel"><p style="margin-top:0"><b>Look for:</b> ${esc(q.l)}</p>
    <p class="muted" style="margin:0 0 6px"><b>${who} score</b>. Your score is saved under your own login. The ${ME.role==="head"?"teacher":"director"} scores separately.</p>
@@ -1028,16 +1058,27 @@ function bindAssess(){
 }
 
 /* ---------- question bank ---------- */
+const bbtn=(attr,label)=>`<button class="ghost" ${attr} style="padding:2px 10px;font-size:.8rem">${label}</button>`;
+// The touch or spoken version for blind learners, under each question in the bank.
+function touchLine(q,head){
+  if(!TOUCH_OK)return needsSight(q)?`<br><span class="tag warn">Needs sight</span>`:"";
+  if(head&&S.et===q.id)return `<br><label class="muted">Touch or spoken version for blind learners<br><textarea id="ett" rows="2" style="width:100%" placeholder="For example: Give the child 3 bottle tops. Ask: How many bottle tops are in your hand?">${esc(q.t||q.tp)}</textarea></label><div style="margin-top:4px"><button class="primary" id="etsave" style="margin:0 6px 0 0;padding:6px 14px">Save touch version</button>${bbtn('id="etcancel"',"Cancel")}</div>`;
+  if(q.t)return `<br>✋ <b>Touch:</b> ${esc(q.t)}${head?" "+bbtn(`data-et="${q.id}"`,"Edit")+" "+bbtn(`data-trm="${q.id}"`,"Remove"):""}`;
+  if(q.tp)return `<br>✋ <b>Touch:</b> ${esc(q.tp)} <span class="tag warn">AI draft, waiting for approval</span>${head?" "+bbtn(`data-tap="${q.id}"`,"Approve")+" "+bbtn(`data-et="${q.id}"`,"Edit")+" "+bbtn(`data-trm="${q.id}"`,"Remove"):""}`;
+  return needsSight(q)?`<br><span class="tag warn">Needs sight: no touch version</span> <span class="muted">Blind learners get NA here.</span>${head?" "+bbtn(`data-et="${q.id}"`,"Add touch version"):""}`:"";
+}
 function bankView(){
-  const c=pickCls(S.cls),ba=S.ba||0,qs=Q[c][ba],noq=NOQ[c][ba],head=isAdmin();
-  const btn=(attr,label)=>`<button class="ghost" ${attr} style="padding:2px 10px;font-size:.8rem">${label}</button>`;
+  const c=pickCls(S.cls),ba=S.ba||0,qs=Q[c][ba],noq=NOQ[c][ba],head=isAdmin(),nt=TOUCH_OK?noTouch(c,ba):[];
+  const btn=bbtn;
   return `<p class="muted" style="margin-top:0">Questions come from the KICD 2024 curriculum and from teachers. Imported questions start as drafts: the director or senior teacher edits and approves them before they are used in assessments. Outcomes with no question yet are listed under the questions.</p>
   <div class="tools">${visCls().map(x=>`<button class="chip" data-c="${x}" aria-pressed="${c===x}">${x}</button>`).join("")}</div>
   <div class="tabs" role="tablist" aria-label="Learning areas">${AR(c).map(a=>`<button class="tab" role="tab" data-a="${a.k}" aria-selected="${a.k===ba}" tabindex="${a.k===ba?0:-1}">${a.n}</button>`).join("")}</div>
   <div class="panel"><h2>${AR(c)[ba].full} · ${c}</h2>${qs.length?qs.map(q=>`<div class="nt"><span class="tag ${q.src==="Teacher"?"ok":""}">${q.src}</span> <b>${esc(q.c)}</b>${q.st?" · "+esc(q.st):""}${q.sub?" · "+esc(q.sub):""}<br>
    ${head&&S.eq===q.id?`<textarea id="eqt" rows="2" style="width:100%">${esc(q.a)}</textarea><div style="margin-top:4px"><button class="primary" id="eqsave" style="margin:0 6px 0 0;padding:6px 14px">Save question</button>${btn('id="eqcancel"',"Cancel")}</div>`:`<b>${esc(q.s)}</b> A: ${esc(q.a)}${q.b?`<br>B: ${esc(q.b)}`:""}`}<br><span class="muted">Look for: ${esc(q.l)}${q.ref?" · "+esc(q.ref):""}</span>
+   ${touchLine(q,head)}
    ${q.ok===false?` <span class="tag warn">Waiting for approval</span>`:""}${q.ok===false&&head?` ${btn(`data-ap="${q.id}"`,"Approve")} ${btn(`data-eq="${q.id}"`,"Edit")} ${btn(`data-rj="${q.id}"`,"Reject")}`:""}${q.src==="Teacher"&&q.ok===false&&q.by===ME.id?` ${btn(`data-del="${q.id}"`,"Remove")}`:""}</div>`).join(""):'<p class="muted">No questions here yet.</p>'}</div>
   ${head&&noq.length?`<p><button class="ghost" id="bk_ai" ${S.aiBusy==="bank"?"disabled":""}>${S.aiBusy==="bank"?"Drafting…":"Draft "+Math.min(10,noq.length)+" questions with AI"}</button> <span class="muted">The AI writes from the curriculum text only. Drafts wait for approval below.</span></p>`:""}
+  ${head&&nt.length?`<p><button class="ghost" id="bk_touch" ${S.aiBusy==="touch"?"disabled":""}>${S.aiBusy==="touch"?"Drafting…":"Draft "+Math.min(10,nt.length)+" touch versions with AI"}</button> <span class="muted">${nt.length} question${nt.length===1?"":"s"} here need${nt.length===1?"s":""} sight. The AI sees the question text only. Drafts wait for approval.</span></p>`:""}
   <details class="panel" ${S.wq?"open":""}><summary><b>${noq.length} outcome${noq.length===1?"":"s"} without a question</b></summary>
    ${noq.length?noq.map(o=>`<div class="nt"><b>${esc(o.c)}</b>${o.st?" · "+esc(o.st):""}${o.sub?" · "+esc(o.sub):""}<br><span class="muted">${esc(o.l)}</span><br>
     ${S.wq===o.id?`<textarea id="wqt" rows="2" style="width:100%" placeholder="What you ask the child, or the task you give"></textarea><div style="margin-top:4px"><button class="primary" id="wqsave" style="margin:0 6px 0 0;padding:6px 14px">Save question</button>${btn('id="wqcancel"',"Cancel")}</div>`:btn(`data-wq="${o.id}"`,"Write a question")}</div>`).join(""):'<p class="muted">Every outcome in this area has a question.</p>'}</details>
@@ -1046,17 +1087,18 @@ function bankView(){
   <p><label class="muted">Question A: what you ask the child<br><input type="text" id="bq" size="44"></label></p>
   <p><label class="muted">Question B (optional alternative)<br><input type="text" id="bb" size="44"></label></p>
   <p><label class="muted">What a good answer looks like<br><input type="text" id="bl" size="44"></label></p>
+  ${TOUCH_OK?`<p><label class="muted">Touch or spoken version for blind learners (optional)<br><input type="text" id="btv" size="44" placeholder="For example: Give the child 3 bottle tops to count"></label></p>`:""}
   <p><label class="muted">Strand (optional, for example Listening)<br><input type="text" id="bt" size="24"></label></p>
   <button class="primary" id="addq" style="margin-top:0">Add question</button> <span class="muted" id="bmsg" role="status"></span></div>`;
 }
 function bindBank(){
   const c=pickCls(S.cls),ba=S.ba||0,reload=async()=>{await loadQuestions();render()};
-  document.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{S.cls=b.dataset.c;S.eq=null;S.wq=null;render()});
-  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{S.ba=+b.dataset.a;S.eq=null;S.wq=null;render()});
+  document.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{S.cls=b.dataset.c;S.eq=null;S.wq=null;S.et=null;render()});
+  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{S.ba=+b.dataset.a;S.eq=null;S.wq=null;S.et=null;render()});
   document.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
     try{await run(sb.from("question_variants").delete().eq("competency_id",+b.dataset.del));await run(sb.from("competencies").delete().eq("id",+b.dataset.del));await reload()}catch(e){fail(e)}});
   document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=async()=>{
-    try{await run(sb.from("question_variants").update({status:"approved",approved_by:ME.id}).eq("competency_id",+b.dataset.ap).eq("status","pending"));await reload()}catch(e){fail(e)}});
+    try{await run(sb.from("question_variants").update({status:"approved",approved_by:ME.id,...(TOUCH_OK?{touch_status:"approved"}:{})}).eq("competency_id",+b.dataset.ap).eq("status","pending"));await reload()}catch(e){fail(e)}});
   document.querySelectorAll("[data-rj]").forEach(b=>b.onclick=async()=>{
     try{await run(sb.from("question_variants").update({status:"rejected"}).eq("competency_id",+b.dataset.rj).eq("status","pending"));await reload()}catch(e){fail(e)}});
   document.querySelectorAll("[data-eq]").forEach(b=>b.onclick=()=>{S.eq=+b.dataset.eq;render()});
@@ -1064,6 +1106,17 @@ function bindBank(){
   const es=$("eqsave");if(es)es.onclick=async()=>{
     const q=Q[c][ba].find(x=>x.id===S.eq),t=$("eqt").value.trim();if(!q||!t)return;
     try{await run(sb.from("question_variants").update({prompt:t}).eq("id",q.va));S.eq=null;await reload()}catch(e){fail(e)}};
+  const qva=id=>(Q[c][ba].find(x=>x.id===id)||{}).va;
+  document.querySelectorAll("[data-et]").forEach(b=>b.onclick=()=>{S.et=+b.dataset.et;render()});
+  const etc=$("etcancel");if(etc)etc.onclick=()=>{S.et=null;render()};
+  const ets=$("etsave");if(ets)ets.onclick=async()=>{
+    const t=$("ett").value.trim(),va=qva(S.et);if(!va||S.saving)return;S.saving=true;
+    try{await run(sb.from("question_variants").update(t?{touch:t,touch_status:"approved"}:{touch:null,touch_status:"pending"}).eq("id",va));S.et=null;await reload()}catch(e){fail(e)}finally{S.saving=false}};
+  document.querySelectorAll("[data-tap]").forEach(b=>b.onclick=async()=>{
+    try{await run(sb.from("question_variants").update({touch_status:"approved"}).eq("id",qva(+b.dataset.tap)));await reload()}catch(e){fail(e)}});
+  document.querySelectorAll("[data-trm]").forEach(b=>b.onclick=async()=>{
+    try{await run(sb.from("question_variants").update({touch:null,touch_status:"pending"}).eq("id",qva(+b.dataset.trm)));await reload()}catch(e){fail(e)}});
+  const bkt=$("bk_touch");if(bkt)bkt.onclick=async()=>{if(S.saving)return;S.saving=true;S.aiBusy="touch";S.err="";rr();try{await draftTouch(c,ba)}catch(e){S.err=e.message}finally{S.aiBusy=null;S.saving=false}try{await reload()}catch(e){fail(e)}};
   const bkai=$("bk_ai");if(bkai)bkai.onclick=async()=>{if(S.saving)return;S.saving=true;S.aiBusy="bank";S.err="";rr();try{await draftBank(c,ba)}catch(e){S.err=e.message}finally{S.aiBusy=null;S.saving=false}try{await reload()}catch(e){fail(e)}};
   document.querySelectorAll("[data-wq]").forEach(b=>b.onclick=()=>{S.wq=+b.dataset.wq;render()});
   const wc=$("wqcancel");if(wc)wc.onclick=()=>{S.wq=null;render()};
@@ -1079,7 +1132,8 @@ function bindBank(){
       const head=isAdmin(),code="TQ"+Date.now().toString(36).toUpperCase();
       const comp=await run(sb.from("competencies").insert({code,class_id:CLASSIDS[c],area_id:AID(c,ba),strand:v("bt")||null,description:v("bl")||"Use your own judgement.",source:"teacher",created_by:ME.id}).select("id").single());
       const base={competency_id:comp.id,shown:v("bs")||"💬",source:"teacher",status:head?"approved":"pending",created_by:ME.id};
-      const vs=[{...base,variant:"A",prompt:a}];
+      const tv=TOUCH_OK?v("btv"):"";
+      const vs=[{...base,variant:"A",prompt:a,...(tv?{touch:tv,touch_status:head?"approved":"pending"}:{})}];
       if(v("bb"))vs.push({...base,variant:"B",prompt:v("bb")});
       await run(sb.from("question_variants").insert(vs));
       await reload();
@@ -1582,10 +1636,11 @@ function checkView(){
   const tabs=`<div class="tabs" role="tablist" aria-label="Learning areas">${AR(l.cls).map(a=>`<button class="tab" role="tab" data-a="${a.k}" aria-selected="${a.k===A}" tabindex="${a.k===A?0:-1}">${a.n}</button>`).join("")}</div>`;
   const qs=checkQs(l,A);
   if(!qs.length)return head+tabs+`<div class="panel"><p class="muted" style="margin:0">There are no approved questions for ${esc(AR(l.cls)[A].full)} in ${l.cls} yet. Pick another area or add questions in the Question bank.</p></div>`;
-  const q=qs[s.qi],g=s.g[A],n=qs.length,scored=g.filter(x=>x!==undefined).length;
+  const g=s.g[A],au=((s.au=s.au||{})[A]=s.au[A]||{});preNA(l,qs,g,au);
+  const q=qs[s.qi],n=qs.length,scored=g.filter(x=>x!==undefined).length;
   return head+tabs+`<div class="stage"><p class="muted" style="margin:0 0 8px">${esc(AR(l.cls)[A].full)} · Question ${s.qi+1} of ${n}${q.hit?" · <span class=\"tag ok\">taught this year</span>":""}</p>
    ${q.st?`<p class="muted" style="margin:0 0 8px"><b>${esc(q.c)}</b> · ${esc(q.st)}${q.sub?" · "+esc(q.sub):""}</p>`:""}
-   ${isBlind(l)&&!s.pic?`<p class="muted" style="margin:0 0 8px"><b>Picture hidden.</b> Read the question aloud and use real objects ${fn} can touch. <button class="ghost" id="showpic">Show picture</button></p>`:`<div class="big">${q.s}</div>`}<p class="ask">${esc(q.a)}</p>${sightWarn(l,q.a)}</div>
+   ${isBlind(l)&&!s.pic?`<p class="muted" style="margin:0 0 8px"><b>Picture hidden.</b> Read the question aloud and use real objects ${fn} can touch. <button class="ghost" id="showpic">Show picture</button></p>`:`<div class="big">${q.s}</div>`}<p class="ask">${esc(askText(l,q))}</p>${blindNote(l,q,g,au,s.qi)}</div>
   <div class="panel"><p style="margin-top:0"><b>Look for:</b> ${esc(q.l)}</p>
    <div class="pick" role="group" aria-label="Score">${GR.map(x=>`<button class="${num(x)?"":"sm"}" data-v="${x}" aria-pressed="${g[s.qi]===x}">${x}</button>`).join("")}</div>
    <p class="rub muted">${g[s.qi]===undefined?"Choose a score from 0 to 5, or NA or DA.":num(g[s.qi])?`${g[s.qi]}: ${G[g[s.qi]]}`:`${g[s.qi]}: ${GL[g[s.qi]]}`}</p>

@@ -1,0 +1,14 @@
+-- Migration 9: touch or spoken versions of questions, for blind learners.
+-- Run once in the Supabase SQL Editor. Safe to run again.
+-- "touch" is the version a blind child is asked instead of question A.
+-- It is only used in assessments once touch_status is 'approved' (by the director or a senior teacher).
+
+alter table question_variants add column if not exists touch text;
+alter table question_variants add column if not exists touch_status text not null default 'pending';
+
+alter table question_variants drop constraint if exists question_variants_touch_status_check;
+alter table question_variants add constraint question_variants_touch_status_check
+  check (touch_status in ('pending', 'approved'));
+
+-- Ask the API to see the new columns straight away.
+notify pgrst, 'reload schema';
