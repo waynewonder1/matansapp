@@ -13,7 +13,7 @@
    "maxDuration": 30
   },
   "api/ai-bank.js": {
-   "maxDuration": 40
+   "maxDuration": 60
   },
   "api/ai-note.js": {
    "maxDuration": 30

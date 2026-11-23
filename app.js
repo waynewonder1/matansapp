@@ -608,22 +608,24 @@ async function runMonthly(){
     const b=S.batch;S.batch={running:false,n:b.n,t:b.t,fail:b.fail,msg:b.fail?`${b.n-b.fail} plan${b.n-b.fail===1?"":"s"} made, ${b.fail} failed. ${b.last||""} Press the button again to retry the rest.`:`${b.n} plan${b.n===1?"":"s"} made. Open each child to review and approve.`};
     S.saving=false;render()}
 }
+// Small AI batches, so Gemini answers inside Vercel's time limit.
+const AIBATCH=5;
 // Drafts questions for curriculum outcomes that have none. They wait for approval in the question bank.
 async function draftBank(c,ba){
-  const items=NOQ[c][ba].slice(0,10).map(o=>({id:o.id,strand:o.st,sub_strand:o.sub||o.c,outcome:o.l}));
+  const items=NOQ[c][ba].slice(0,AIBATCH).map(o=>({id:o.id,strand:o.st,sub_strand:o.sub||o.c,outcome:o.l}));
   if(!items.length)return 0;
   const {data}=await sb.auth.getSession();
   const r=await fetch((CFG.API_URL||"")+"/api/ai-bank",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+data.session.access_token},body:JSON.stringify({class:c,area:AR(c)[ba].full,items})});
   let j={};try{j=await r.json()}catch(e){}
   if(!r.ok)throw new Error(j.error||("The AI service did not answer ("+r.status+"). Check that api/ai-bank.js is deployed on Vercel."));
   await run(sb.from("question_variants").insert(j.questions.map(q=>({competency_id:q.id,variant:"A",shown:q.shown,prompt:q.prompt,source:"curriculum",status:"pending",created_by:ME.id,
-    ...(TOUCH_OK&&q.touch?{touch:q.touch,touch_status:"pending"}:{})}))));
+    ...(TOUCH_OK?{touch:q.touch||null,touch_status:"pending"}:{})}))));
   return j.questions.length;
 }
 // Sight questions that still need a touch version. Only the question text goes to the AI, never a child's details.
 const noTouch=(c,ba)=>Q[c][ba].filter(q=>needsSight(q)&&!q.t&&!q.tp);
 async function draftTouch(c,ba){
-  const items=noTouch(c,ba).slice(0,10).map(q=>({id:q.id,prompt:q.a,look_for:q.l}));
+  const items=noTouch(c,ba).slice(0,AIBATCH).map(q=>({id:q.id,prompt:q.a,look_for:q.l}));
   if(!items.length)return 0;
   const {data}=await sb.auth.getSession();
   const r=await fetch((CFG.API_URL||"")+"/api/ai-bank",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+data.session.access_token},body:JSON.stringify({mode:"touch",class:c,area:AR(c)[ba].full,items})});
@@ -1063,8 +1065,8 @@ const bbtn=(attr,label)=>`<button class="ghost" ${attr} style="padding:2px 10px;
 function touchLine(q,head){
   if(!TOUCH_OK)return needsSight(q)?`<br><span class="tag warn">Needs sight</span>`:"";
   if(head&&S.et===q.id)return `<br><label class="muted">Touch or spoken version for blind learners<br><textarea id="ett" rows="2" style="width:100%" placeholder="For example: Give the child 3 bottle tops. Ask: How many bottle tops are in your hand?">${esc(q.t||q.tp)}</textarea></label><div style="margin-top:4px"><button class="primary" id="etsave" style="margin:0 6px 0 0;padding:6px 14px">Save touch version</button>${bbtn('id="etcancel"',"Cancel")}</div>`;
-  if(q.t)return `<br>✋ <b>Touch:</b> ${esc(q.t)}${head?" "+bbtn(`data-et="${q.id}"`,"Edit")+" "+bbtn(`data-trm="${q.id}"`,"Remove"):""}`;
-  if(q.tp)return `<br>✋ <b>Touch:</b> ${esc(q.tp)} <span class="tag warn">AI draft, waiting for approval</span>${head?" "+bbtn(`data-tap="${q.id}"`,"Approve")+" "+bbtn(`data-et="${q.id}"`,"Edit")+" "+bbtn(`data-trm="${q.id}"`,"Remove"):""}`;
+  if(q.t)return `<br>✋ <b>Touch:</b> ${esc(q.t)}${head?" "+bbtn(`data-et="${q.id}"`,"Edit touch")+" "+bbtn(`data-trm="${q.id}"`,"Remove touch"):""}`;
+  if(q.tp)return `<br>✋ <b>Touch:</b> ${esc(q.tp)} <span class="tag warn">AI draft, waiting for approval</span>${head?" "+bbtn(`data-tap="${q.id}"`,"Approve touch")+" "+bbtn(`data-et="${q.id}"`,"Edit touch")+" "+bbtn(`data-trm="${q.id}"`,"Remove touch"):""}`;
   return needsSight(q)?`<br><span class="tag warn">Needs sight: no touch version</span> <span class="muted">Blind learners get NA here.</span>${head?" "+bbtn(`data-et="${q.id}"`,"Add touch version"):""}`:"";
 }
 function bankView(){
@@ -1076,9 +1078,9 @@ function bankView(){
   <div class="panel"><h2>${AR(c)[ba].full} · ${c}</h2>${qs.length?qs.map(q=>`<div class="nt"><span class="tag ${q.src==="Teacher"?"ok":""}">${q.src}</span> <b>${esc(q.c)}</b>${q.st?" · "+esc(q.st):""}${q.sub?" · "+esc(q.sub):""}<br>
    ${head&&S.eq===q.id?`<textarea id="eqt" rows="2" style="width:100%">${esc(q.a)}</textarea><div style="margin-top:4px"><button class="primary" id="eqsave" style="margin:0 6px 0 0;padding:6px 14px">Save question</button>${btn('id="eqcancel"',"Cancel")}</div>`:`<b>${esc(q.s)}</b> A: ${esc(q.a)}${q.b?`<br>B: ${esc(q.b)}`:""}`}<br><span class="muted">Look for: ${esc(q.l)}${q.ref?" · "+esc(q.ref):""}</span>
    ${touchLine(q,head)}
-   ${q.ok===false?` <span class="tag warn">Waiting for approval</span>`:""}${q.ok===false&&head?` ${btn(`data-ap="${q.id}"`,"Approve")} ${btn(`data-eq="${q.id}"`,"Edit")} ${btn(`data-rj="${q.id}"`,"Reject")}`:""}${q.src==="Teacher"&&q.ok===false&&q.by===ME.id?` ${btn(`data-del="${q.id}"`,"Remove")}`:""}</div>`).join(""):'<p class="muted">No questions here yet.</p>'}</div>
-  ${head&&noq.length?`<p><button class="ghost" id="bk_ai" ${S.aiBusy==="bank"?"disabled":""}>${S.aiBusy==="bank"?"Drafting…":"Draft "+Math.min(10,noq.length)+" questions with AI"}</button> <span class="muted">The AI writes from the curriculum text only. Drafts wait for approval below.</span></p>`:""}
-  ${head&&nt.length?`<p><button class="ghost" id="bk_touch" ${S.aiBusy==="touch"?"disabled":""}>${S.aiBusy==="touch"?"Drafting…":"Draft "+Math.min(10,nt.length)+" touch versions with AI"}</button> <span class="muted">${nt.length} question${nt.length===1?"":"s"} here need${nt.length===1?"s":""} sight. The AI sees the question text only. Drafts wait for approval.</span></p>`:""}
+   ${q.ok===false?`<br><span class="tag warn">Question waiting for approval</span>`:""}${q.ok===false&&head?` ${btn(`data-ap="${q.id}"`,"Approve")} ${btn(`data-eq="${q.id}"`,"Edit")} ${btn(`data-rj="${q.id}"`,"Reject")}`:""}${q.src==="Teacher"&&q.ok===false&&q.by===ME.id?` ${btn(`data-del="${q.id}"`,"Remove")}`:""}</div>`).join(""):'<p class="muted">No questions here yet.</p>'}</div>
+  ${head&&noq.length?`<p><button class="ghost" id="bk_ai" ${S.aiBusy==="bank"?"disabled":""}>${S.aiBusy==="bank"?"Drafting…":"Draft "+Math.min(AIBATCH,noq.length)+" questions with AI"}</button> <span class="muted">The AI writes from the curriculum text only. Drafts wait for approval below.</span></p>`:""}
+  ${head&&nt.length?`<p><button class="ghost" id="bk_touch" ${S.aiBusy==="touch"?"disabled":""}>${S.aiBusy==="touch"?"Drafting…":"Draft "+Math.min(AIBATCH,nt.length)+" touch versions with AI"}</button> <span class="muted">${nt.length} question${nt.length===1?"":"s"} here need${nt.length===1?"s":""} sight. The AI sees the question text only. Drafts wait for approval.</span></p>`:""}
   <details class="panel" ${S.wq?"open":""}><summary><b>${noq.length} outcome${noq.length===1?"":"s"} without a question</b></summary>
    ${noq.length?noq.map(o=>`<div class="nt"><b>${esc(o.c)}</b>${o.st?" · "+esc(o.st):""}${o.sub?" · "+esc(o.sub):""}<br><span class="muted">${esc(o.l)}</span><br>
     ${S.wq===o.id?`<textarea id="wqt" rows="2" style="width:100%" placeholder="What you ask the child, or the task you give"></textarea><div style="margin-top:4px"><button class="primary" id="wqsave" style="margin:0 6px 0 0;padding:6px 14px">Save question</button>${btn('id="wqcancel"',"Cancel")}</div>`:btn(`data-wq="${o.id}"`,"Write a question")}</div>`).join(""):'<p class="muted">Every outcome in this area has a question.</p>'}</details>
@@ -1131,7 +1133,7 @@ function bindBank(){
     try{
       const head=isAdmin(),code="TQ"+Date.now().toString(36).toUpperCase();
       const comp=await run(sb.from("competencies").insert({code,class_id:CLASSIDS[c],area_id:AID(c,ba),strand:v("bt")||null,description:v("bl")||"Use your own judgement.",source:"teacher",created_by:ME.id}).select("id").single());
-      const base={competency_id:comp.id,shown:v("bs")||"💬",source:"teacher",status:head?"approved":"pending",created_by:ME.id};
+      const base={competency_id:comp.id,shown:v("bs")||"💬",source:"teacher",status:head?"approved":"pending",created_by:ME.id,...(TOUCH_OK?{touch:null,touch_status:"pending"}:{})};
       const tv=TOUCH_OK?v("btv"):"";
       const vs=[{...base,variant:"A",prompt:a,...(tv?{touch:tv,touch_status:head?"approved":"pending"}:{})}];
       if(v("bb"))vs.push({...base,variant:"B",prompt:v("bb")});
