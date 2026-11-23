@@ -1403,7 +1403,7 @@ function bindTeach(){
 
 /* ---------- staff (director) ---------- */
 // The director adds teachers and sets roles. Creating a login needs the api/staff.js function on Vercel.
-const SD={rows:[],loaded:false,msg:"",cred:null,add:{name:"",email:"",phone:"",role:"teacher",cls:"",pw:""}};
+const SD={rows:[],loaded:false,msg:"",cred:null,row:null,add:{name:"",email:"",phone:"",role:"teacher",cls:"",pw:""}};
 async function loadStaff(){SD.rows=await run(sb.from("staff").select("id,name,role,phone").order("name"));SD.loaded=true}
 async function staffApi(body){
   const {data}=await sb.auth.getSession();
@@ -1413,6 +1413,13 @@ async function staffApi(body){
   return j;
 }
 const clsOf=id=>CLASSES.find(c=>TEACHID[c]===id)||"";
+// The result of Save or New password, shown next to the buttons that were pressed.
+function staffRowNote(r){
+  const x=SD.row;if(!x||x.id!==r.id||x.busy)return "";
+  if(x.err)return `<div class="note watch" role="alert" style="margin:8px 0 0">${esc(x.err)}</div>`;
+  if(x.pw)return `<div class="note tip" role="status" style="margin:8px 0 0"><b>New password for ${esc(r.name)}:</b> <code>${esc(x.pw)}</code><br><span class="muted">Their old password no longer works. Write this down and give it to them now. It is not shown again, and they can change it after they sign in.</span> <button class="ghost" data-rowdone>Done</button></div>`;
+  return `<div class="note good" role="status" style="margin:8px 0 0">${esc(x.msg)}</div>`;
+}
 function staffView(){
   const a=SD.add,opt=(v,t,cur)=>`<option value="${v}" ${cur===v?"selected":""}>${t}</option>`;
   const roleSel=(id,cur,dis)=>`<select id="sr_${id}" ${dis?"disabled":""}>${["teacher","senior","head"].map(r=>opt(r,ROLEN[r],cur)).join("")}</select>`;
@@ -1428,10 +1435,10 @@ function staffView(){
    <label class="muted">Role<br><select id="s_role">${["teacher","senior","head"].map(r=>opt(r,ROLEN[r],a.role)).join("")}</select></label>
    <label class="muted">Class<br><select id="s_cls"><option value="">No class</option>${classList().map(c=>opt(c,c,a.cls)).join("")}</select></label>
    <label class="muted">Password (optional)<br><input type="text" id="s_pw" placeholder="Leave empty to make one" value="${esc(a.pw)}"></label></div>
-   <button class="primary" id="s_add">Add staff member</button> <span class="muted">A class is only used for teachers.</span></div>
+   <button class="primary" id="s_add">Add staff member</button> <span class="muted">Class: the class this person teaches, if any. The director and senior teacher see every class either way.</span></div>
   <div class="panel"><h2>Staff</h2>${!SD.loaded?'<p class="muted">Loading…</p>':`<div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Class</th><th></th></tr></thead><tbody>
    ${SD.rows.map(r=>`<tr><td><b>${esc(r.name)}</b>${r.id===ME.id?' <span class="muted">(you)</span>':""}${r.phone?`<br><span class="muted">${esc(r.phone)}</span>`:""}</td><td>${roleSel(r.id,r.role,r.id===ME.id)}</td><td>${clsSel(r.id,clsOf(r.id))}</td>
-    <td><button class="ghost" data-ssave="${r.id}">Save</button> <button class="ghost" data-spw="${r.id}">New password</button></td></tr>`).join("")}</tbody></table></div>`}</div>`;
+    <td><button class="ghost" data-ssave="${r.id}" ${S.saving?"disabled":""}>${SD.row&&SD.row.id===r.id&&SD.row.busy==="save"?"Saving…":"Save"}</button> <button class="ghost" data-spw="${r.id}" ${S.saving?"disabled":""}>${SD.row&&SD.row.id===r.id&&SD.row.busy==="pw"?"Making…":"New password"}</button>${staffRowNote(r)}</td></tr>`).join("")}</tbody></table></div>`}</div>`;
 }
 function bindStaff(){
   const keep=()=>{const g=id=>($(id)||{}).value||"";SD.add={name:g("s_name"),email:g("s_email"),phone:g("s_phone"),role:g("s_role")||"teacher",cls:g("s_cls"),pw:g("s_pw")}};
@@ -1446,18 +1453,25 @@ function bindStaff(){
       await loadAll();await loadStaff();render()}
     catch(e){fail(e)}finally{S.saving=false}};
   document.querySelectorAll("[data-ssave]").forEach(b=>b.onclick=async()=>{
-    const id=b.dataset.ssave,role=$("sr_"+id).value,row=SD.rows.find(r=>r.id===id),cls=role==="teacher"?$("sc_"+id).value:"";if(!row||S.saving)return;
-    S.saving=true;
+    const id=b.dataset.ssave,role=$("sr_"+id).value,row=SD.rows.find(r=>r.id===id),cls=$("sc_"+id).value;if(!row||S.saving)return;
+    const had=TEACHID[cls],hadName=had&&had!==id?(SD.rows.find(r=>r.id===had)||{}).name:"";
+    S.saving=true;SD.row={id,busy:"save"};SD.msg="";render();
     try{
       if(role!==row.role)await run(sb.from("staff").update({role}).eq("id",id));
       for(const c of CLASSES){if(CLASSIDS[c]&&TEACHID[c]===id&&c!==cls)await run(sb.from("classes").update({teacher_id:null}).eq("id",CLASSIDS[c]))}
       if(cls&&TEACHID[cls]!==id)await run(sb.from("classes").update({teacher_id:id}).eq("id",CLASSIDS[cls]));
-      SD.msg=`Saved ${row.name}.`;S.err="";await loadAll();await loadStaff();render()}
-    catch(e){fail(e)}finally{S.saving=false}});
+      await loadAll();await loadStaff();
+      SD.row={id,msg:`Saved. ${row.name} is ${ROLEN[role]}${cls?`, class teacher of ${cls}`:", with no class"}.${hadName?` ${hadName} is no longer ${cls}’s class teacher.`:""}`};S.err=""}
+    catch(e){SD.row={id,err:"Not saved: "+(e.message||e)}}
+    finally{S.saving=false;render()}});
   document.querySelectorAll("[data-spw]").forEach(b=>b.onclick=async()=>{
-    const id=b.dataset.spw,row=SD.rows.find(r=>r.id===id);if(!row||S.saving)return;S.saving=true;
-    try{const j=await staffApi({action:"reset_password",staff_id:id});SD.cred={name:row.name,email:"(their existing email)",password:j.password};SD.msg="";S.err="";render()}
-    catch(e){fail(e)}finally{S.saving=false}});
+    const id=b.dataset.spw,row=SD.rows.find(r=>r.id===id);if(!row||S.saving)return;
+    if(!confirm(`Make a new password for ${row.name}? Their old password will stop working straight away.`))return;
+    S.saving=true;SD.row={id,busy:"pw"};SD.msg="";render();
+    try{const j=await staffApi({action:"reset_password",staff_id:id});SD.row={id,pw:j.password};S.err=""}
+    catch(e){SD.row={id,err:"No new password was made: "+(e.message||e)}}
+    finally{S.saving=false;render()}});
+  document.querySelectorAll("[data-rowdone]").forEach(b=>b.onclick=()=>{SD.row=null;render()});
 }
 
 /* ---------- needs found in the doctor's report ---------- */

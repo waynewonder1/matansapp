@@ -64,7 +64,7 @@ module.exports = async function handler(req, res) {
         return send(502, { error: "The staff record could not be saved. Has migration-6 been run?" });
       }
       const cls = clip(body.class_name, 10);
-      if (role === "teacher" && cls) await call("/rest/v1/classes?name=eq." + encodeURIComponent(cls), { method: "PATCH", key: service, body: { teacher_id: made.json.id }, prefer: "return=minimal" });
+      if (cls) await call("/rest/v1/classes?name=eq." + encodeURIComponent(cls), { method: "PATCH", key: service, body: { teacher_id: made.json.id }, prefer: "return=minimal" });
       return send(200, { id: made.json.id, email, password });
     }
 

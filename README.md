@@ -15,7 +15,7 @@ A school system for Playgroup, PP1 and PP2. It runs on **Vercel** (the website a
 
 ## Set up
 
-1. **Database.** In Supabase, open the SQL Editor and run every file in `sql/` in number order (migration 4 to 9 are the newest). Skip any you already ran.
+1. **Database.** In Supabase, open the SQL Editor and run every file in `sql/` in number order (migration 4 to 10 are the newest). For a brand-new, empty Supabase project, run `SQL/0-rebuild-from-empty.sql` instead, then any migration newer than the date at its top. Skip any you already ran.
 2. **Secrets.** In Vercel, open your project, then Settings, then Environment Variables. Add these for Production and Preview:
    - `SUPABASE_URL`
    - `SUPABASE_ANON_KEY`
@@ -41,3 +41,9 @@ Nothing that identifies a child (name, phone number, diagnosis, notes, doctor's 
 - "No guardian consent": tick the consent box on the learner's page first.
 - A new tab says it needs migration-8: run `sql/migration-8-checks-curriculum-reports.sql`.
 - The question bank shows "Needs sight" but no "Add touch version" button: run `SQL/Migration 9 touch questions`.
+
+## Backups
+
+Run the five read-only queries in `SQL/backup/` in the SQL Editor, download each result as CSV, then run
+`python -I SQL/backup/make-rebuild.py tables.csv keys.csv code.csv security.csv data.csv` to refresh `SQL/0-rebuild-from-empty.sql`.
+It holds the structure, security rules and question bank, not learner records. Do this after every new migration.
