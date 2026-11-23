@@ -2,8 +2,8 @@
    Signs in with Supabase, then reads and saves real data. Settings are in config.js. */
 const CFG=window.MATAN_CONFIG;
 // The school's details for printed report cards. config.js can override any of them with SCHOOL: {...}.
-const SCH=Object.assign({name:"Matan Premier Kindergarten",motto:"Where Mastery Begins",address:"Kiamumbi, Quito Street · QS 54",
-  phone:"0712 000 805 · 0721 605 578",email:"matanpremierschools@gmail.com",logo:"logo.jpg"},CFG.SCHOOL||{});
+const SCH=Object.assign({name:"Matan Premier Kindergarten",motto:"Where Mastery Begins",address:"Kiamumbi, Quito Street · QS 54, off Kamiti Road, Nairobi",
+  phone:"0712 000 805 · 0721 605 578",email:"matanpremierschools@gmail.com",web:"matanpremierschools.co.ke",logo:"logo.jpg"},CFG.SCHOOL||{});
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 
 const AREAS=[
@@ -212,7 +212,7 @@ async function enter(user){
   if(!st){await sb.auth.signOut();ME=null;S.view="login";S.err="This login is not set up as Matan staff yet.";render();return}
   ME=st;S.err="";
   await loadAll();
-  S.view="list";render();
+  S.view=isAdmin()?"home":"list";OV.loaded=false;render();
 }
 async function doLogin(){
   const {data,error}=await sb.auth.signInWithPassword({email:$("em").value.trim(),password:$("pw").value});
@@ -1725,7 +1725,7 @@ function repView(){
   const nextT=TERMS[TERMS.indexOf(label)+1]||"";
   const card=`<div class="rcard" id="rcard"><div class="rc-h">${SCH.logo?`<img class="rc-logo" src="${esc(SCH.logo)}" alt="${esc(SCH.name)} logo">`:""}
     <div class="rc-school"><h2>${esc(SCH.name)}</h2>${SCH.motto?`<p class="rc-motto">${esc(SCH.motto)}</p>`:""}
-    <p class="rc-contact">${[SCH.address,SCH.phone,SCH.email].filter(Boolean).map(esc).join("<br>")}</p></div></div>
+    <p class="rc-contact">${[SCH.address,SCH.phone,[SCH.email,SCH.web].filter(Boolean).join(" · ")].filter(Boolean).map(esc).join("<br>")}</p></div></div>
    <p class="rc-title">Termly Report Card · ${esc(label)}</p>
    <dl class="facts"><div><dt>Learner</dt><dd>${esc(l.name)}</dd></div><div><dt>Class</dt><dd>${l.cls}</dd></div><div><dt>Class teacher</dt><dd>${esc(TEACH[l.cls]||"")}</dd></div><div><dt>Age</dt><dd>${l.age!==null?l.age+" years":"—"}</dd></div><div><dt>Attendance</dt><dd>${l.att!==null?l.att+"%":"Not recorded"}</dd></div></dl>
    <table><thead><tr><th>Learning area</th><th>Score (0 to 5)</th><th>KICD level</th>${pv?"<th>Last term</th>":""}</tr></thead><tbody>
@@ -1795,6 +1795,84 @@ function bindRep(){
     }catch(e){fail(e)}finally{S.saving=false}};
 }
 
+/* ---------- director overview ---------- */
+// The director's and senior teacher's first page: how each class is doing today and this term, and what needs attention.
+// It reads only what the app already has, plus today's registers and this term's report comments.
+const OV={loaded:false,day:"",att:[],staff:[],rc:[]};
+async function loadOverview(){
+  const d=todayStr(),opt=p=>p.catch(e=>{console.warn("Overview:",e&&e.message);return []});
+  const [att,st,rc]=await Promise.all([
+    opt(run(sb.from("attendance").select("learner_id,present").eq("day",d).range(0,4999))),
+    ATX_OK?opt(run(sb.from("staff_attendance").select("staff_id,status").eq("day",d))):Promise.resolve([]),
+    CHK_OK&&CURID?opt(fetchAll("report_comments","learner_id,teacher_comment,head_comment,term_id","learner_id")):Promise.resolve([])]);
+  await ensureCurr();
+  Object.assign(OV,{loaded:true,day:d,att,staff:st,rc:rc.filter(r=>r.term_id===CURID)});
+}
+// Why a child is on the "keep an eye on" list, in plain words.
+function watchWhy(l){
+  const w=[];
+  if(has(l)&&avg(last(l))<2.5)w.push(`average ${f1(avg(last(l)))} of 5`);
+  if(has(l)&&l.scores.length>1&&avg(last(l))-avg(first(l))<=-0.4)w.push("scores going down");
+  if(l.att!==null&&l.att<80)w.push(`attendance ${l.att}%`);
+  const g=(l.goals||[]).filter(x=>x.st&&x.st.overdue).length;if(g)w.push(g===1?"a goal needs a check-in":`${g} goals need a check-in`);
+  return w;
+}
+function homeView(){
+  if(!OV.loaded)return `<p class="muted">Loading the overview…</p>`;
+  const cls=classList(),weekend=[0,6].includes(new Date().getDay());
+  const here={},rcBy={};OV.att.forEach(a=>{here[a.learner_id]=a.present});OV.rc.forEach(r=>{rcBy[r.learner_id]=r});
+  const qPend=Object.values(Q).flat(2).filter(q=>q.ok===false).length,aiPend=L.reduce((n,l)=>n+(l.pend||0),0);
+  const marked=L.filter(l=>l.id in here),present=marked.filter(l=>here[l.id]).length;
+  const watch=L.map(l=>({l,w:watchWhy(l)})).filter(x=>x.w.length).sort((a,b)=>b.w.length-a.w.length||a.l.name.localeCompare(b.l.name));
+  const go=(v,t)=>`<button class="ghost" data-go="${v}" style="padding:2px 10px;font-size:.8rem">${t}</button>`;
+  const when=new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+
+  // Things to do, most urgent first. Each one links to the page where it is fixed.
+  const todo=[];
+  cls.filter(c=>!TEACHID[c]).forEach(c=>todo.push([`${c} has no class teacher, so no teacher can see its children.`,isHead()?go("staff","Staff page"):""]));
+  if(!weekend)cls.filter(c=>L.some(l=>l.cls===c)&&!L.some(l=>l.cls===c&&l.id in here)).forEach(c=>todo.push([`${c} attendance has not been marked today.`,go("att","Attendance")]));
+  if(ATX_OK&&!weekend&&STAFFROWS.length&&OV.staff.length<STAFFROWS.length)todo.push([`Teacher register: ${STAFFROWS.length-OV.staff.length} of ${STAFFROWS.length} staff not marked today.`,go("att","Attendance")]);
+  if(qPend)todo.push([`${qPend} question${qPend===1?"":"s"} waiting for approval in the Question bank.`,go("bank","Question bank")]);
+  if(AI_OK&&aiPend)todo.push([`${aiPend} AI suggestion${aiPend===1?"":"s"} (goals or questions) waiting for a teacher to approve.`,go(isHead()?"teach":"list","See which")]);
+  if(TIER_OK){const nt=L.filter(l=>!tierSet(l)).length;if(nt)todo.push([`${nt} learner${nt===1?" has":"s have"} no confirmed support tier.`,go("list","Learners")])}
+  const notDone=L.filter(l=>!done(l)).length;if(CUR&&notDone)todo.push([`${notDone} of ${L.length} learners are not fully assessed for ${esc(CUR)} yet.`,go("queue","Assessment")]);
+
+  let h=`<div class="panel"><h2 style="margin-bottom:2px">Overview</h2><p class="muted" style="margin:0">${esc(when)} · ${esc(CUR||"No term set")}</p></div>
+  <div class="stats">
+   <div class="stat"><b>${L.length}</b><span>Active learners</span></div>
+   <div class="stat"><b>${weekend?"—":marked.length?`${present} of ${marked.length}`:"—"}</b><span>${weekend?"Weekend, no register":marked.length?"Present today (marked so far)":"Attendance not marked yet today"}</span></div>
+   <div class="stat"><b>${L.filter(done).length} of ${L.length}</b><span>Fully assessed in ${esc(CUR)}</span></div>
+   <div class="stat"><b>${watch.length}</b><span>Children to keep an eye on</span></div>
+   <div class="stat"><b>${qPend+(AI_OK?aiPend:0)}</b><span>Waiting for approval</span></div></div>`;
+
+  h+=`<div class="panel"><h2>Needs attention</h2>${todo.length?`<ul class="ov-todo">${todo.map(t=>`<li><span>${t[0]}</span>${t[1]}</li>`).join("")}</ul>`:'<p class="muted" style="margin:0">Nothing needs attention right now.</p>'}</div>`;
+
+  h+=`<div class="panel"><h2>Classes</h2><p class="muted">Averages are for ${esc(CUR)}, from 0 to 5, for children assessed in all areas. Classes are small, so one child can move an average a lot.</p>
+  <div class="scroll"><table style="min-width:760px"><thead><tr><th>Class</th><th>Teacher</th><th>Learners</th><th>Here today</th><th>Fully assessed</th><th>Average</th><th>Curriculum taught</th>${CHK_OK?"<th>Report comments</th>":""}<th>Keep an eye on</th></tr></thead><tbody>`;
+  cls.forEach(c=>{
+    const ls=L.filter(l=>l.cls===c),n=ls.length,m=ls.filter(l=>l.id in here),full=ls.filter(done),items=COV_OK&&CIDONE?CI.filter(i=>i.cls===c):[];
+    const pct=items.length?covPct(items):null,rcT=ls.filter(l=>rcBy[l.id]&&rcBy[l.id].teacher_comment).length,rcH=ls.filter(l=>rcBy[l.id]&&rcBy[l.id].head_comment).length;
+    h+=`<tr><td><b>${c}</b></td><td>${TEACHID[c]?esc(TEACH[c]):'<span class="tag warn">Not assigned</span>'}</td><td>${n}</td>
+    <td>${!n?"—":weekend?'<span class="muted">Weekend</span>':m.length?`${m.filter(l=>here[l.id]).length} of ${m.length}${m.length<n?` <span class="muted">(${n-m.length} not marked)</span>`:""}`:'<span class="tag warn">Not marked</span>'}</td>
+    <td>${n?`${full.length} of ${n}<div class="bar" aria-hidden="true"><i style="width:${Math.round(100*full.length/n)}%"></i></div>`:"—"}</td>
+    <td>${full.length?cell(avg(full.map(l=>avg(l.cur)))):"—"}</td>
+    <td>${pct===null?'<span class="muted">—</span>':`${pct}%<div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>`}</td>
+    ${CHK_OK?`<td>${n?`Teacher ${rcT} of ${n}<br>Director ${rcH} of ${n}`:"—"}</td>`:""}
+    <td>${watch.filter(x=>x.l.cls===c).length}</td></tr>`});
+  h+=`</tbody></table></div></div>`;
+
+  h+=`<div class="panel"><h2>Children to keep an eye on</h2><p class="muted">Low or falling scores, attendance under 80%, or a support goal without a recent check-in. This is a prompt to talk with the teacher, not a judgement on the child.</p>
+  ${watch.length?`<div class="scroll"><table><thead><tr><th>Learner</th><th>Class</th><th>Why</th><th></th></tr></thead><tbody>${watch.slice(0,15).map(x=>`<tr><td><b>${esc(x.l.name)}</b></td><td>${x.l.cls}</td><td>${esc(x.w.join(", "))}</td><td><button class="ghost" data-open="${x.l.id}" style="padding:2px 10px;font-size:.8rem">Open</button></td></tr>`).join("")}</tbody></table></div>${watch.length>15?`<p class="muted">And ${watch.length-15} more. See the Learners page.</p>`:""}`:'<p class="muted" style="margin:0">No one right now.</p>'}</div>`;
+
+  if(ATX_OK&&STAFFROWS.length){const by={};OV.staff.forEach(s=>{by[s.staff_id]=s.status});
+    h+=`<div class="panel"><h2>Staff today</h2><div class="tools">${staffList().map(s=>`<span class="tag ${by[s.id]==="present"?"ok":by[s.id]?"warn":""}">${esc(s.name)} · ${by[s.id]?STAT[by[s.id]]:"Not marked"}</span>`).join(" ")}</div></div>`}
+  return h;
+}
+function bindHome(){
+  document.querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{const v=b.dataset.go;S.view=v;S.err="";if(v==="att"){AT.loaded=false;TA.loaded=false}if(v==="teach")TD=null;if(v==="staff")SD.loaded=false;render()});
+  document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>{S.sel=b.dataset.open;S.view="profile";S.err="";render()});
+}
+
 /* ---------- page ---------- */
 function render(){
   const m=$("main");
@@ -1805,13 +1883,13 @@ function render(){
     $("nav").innerHTML="";m.innerHTML=loginView();
     $("signin").onclick=doLogin;$("pw").onkeydown=e=>{if(e.key==="Enter")doLogin()};return}
   const pend=isAdmin()?Object.values(Q).flat(2).filter(q=>q.ok===false).length:0;
-  const tabs=[["list","Learners"],["queue","Assessment"],["att","Attendance"],["cov","Curriculum"],["rep","Report cards"],["bank","Question bank"+(pend?` (${pend} to approve)`:"")]].concat(isAdmin()?[["add","Add learners"]]:[]).concat(isHead()?[["teach","Teaching insights"],["staff","Staff"]]:[]);
+  const tabs=(isAdmin()?[["home","Overview"]]:[]).concat([["list","Learners"],["queue","Assessment"],["att","Attendance"],["cov","Curriculum"],["rep","Report cards"],["bank","Question bank"+(pend?` (${pend} to approve)`:"")]]).concat(isAdmin()?[["add","Add learners"]]:[]).concat(isHead()?[["teach","Teaching insights"],["staff","Staff"]]:[]);
   const cur=S.view==="profile"?"list":S.view==="assess"||S.view==="check"?"queue":S.view;
   $("nav").innerHTML=tabs.map(t=>`<button data-t="${t[0]}" ${cur===t[0]?'aria-current="page"':''}>${t[1]}</button>`).join("");
-  $("nav").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.view=b.dataset.t;S.err="";S.sess=null;S.eq=null;S.wq=null;if(b.dataset.t==="teach")TD=null;if(b.dataset.t==="att"){AT.loaded=false;TA.loaded=false}if(b.dataset.t==="staff")SD.loaded=false;if(b.dataset.t==="cov")CIDONE=false;if(b.dataset.t==="rep"){S.rmsg=""}S.chk=null;AD.msg="";render()});
+  $("nav").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.view=b.dataset.t;S.err="";S.sess=null;S.eq=null;S.wq=null;if(b.dataset.t==="teach")TD=null;if(b.dataset.t==="home")OV.loaded=false;if(b.dataset.t==="att"){AT.loaded=false;TA.loaded=false}if(b.dataset.t==="staff")SD.loaded=false;if(b.dataset.t==="cov")CIDONE=false;if(b.dataset.t==="rep"){S.rmsg=""}S.chk=null;AD.msg="";render()});
   applyPrefs();
   const err=S.err?`<div class="note watch" role="alert">${esc(S.err)} <button class="ghost" id="dismiss" style="padding:2px 10px;font-size:.8rem">Dismiss</button></div>`:"";
-  m.innerHTML=err+(S.view==="list"?listView():S.view==="profile"?profileView():S.view==="queue"?queueView():S.view==="assess"?assessView():S.view==="bank"?bankView():S.view==="att"?attView():S.view==="add"?addView():S.view==="staff"?staffView():S.view==="cov"?covView():S.view==="rep"?repView():S.view==="check"?checkView():teachView());
+  m.innerHTML=err+(S.view==="home"?homeView():S.view==="list"?listView():S.view==="profile"?profileView():S.view==="queue"?queueView():S.view==="assess"?assessView():S.view==="bank"?bankView():S.view==="att"?attView():S.view==="add"?addView():S.view==="staff"?staffView():S.view==="cov"?covView():S.view==="rep"?repView():S.view==="check"?checkView():teachView());
   const dm=$("dismiss");if(dm)dm.onclick=()=>{S.err="";render()};
   if(S.view==="list"){fillGrid();$("q").oninput=e=>{S.q=e.target.value;fillGrid()};m.querySelectorAll(".chip[data-c]").forEach(b=>b.onclick=()=>{S.lcls=b.dataset.c;render()});const lp=$("lsp");if(lp)lp.onclick=()=>{S.lsp=!S.lsp;render()};m.querySelectorAll(".chip[data-tier]").forEach(b=>b.onclick=()=>{S.ltier=S.ltier===b.dataset.tier?"":b.dataset.tier;render()});const mr=$("m_run");if(mr)mr.onclick=runMonthly}
   if(S.view==="queue"){m.querySelectorAll(".chip[data-c]").forEach(b=>b.onclick=()=>{S.cls=b.dataset.c;render()});m.querySelectorAll(".chip[data-qm]").forEach(b=>b.onclick=()=>{S.qmode=b.dataset.qm;render()});m.querySelectorAll(".card").forEach(b=>b.onclick=()=>S.qmode==="check"&&CHK_OK?beginCheck(b.dataset.i):begin(b.dataset.i))}
@@ -1823,6 +1901,7 @@ function render(){
   if(S.view==="att"){bindAtt();
     if(S.attTab==="staff"){if(ATX_OK&&!TA.loaded&&!S.atLoading){S.atLoading=true;if(!TA.date)TA.date=todayStr();loadStaffDay().then(()=>{S.atLoading=false;render()}).catch(e=>{S.atLoading=false;fail(e)})}}
     else if(!AT.loaded&&!S.atLoading){S.atLoading=true;if(!AT.date)AT.date=todayStr();loadDay().then(()=>{S.atLoading=false;render()}).catch(e=>{S.atLoading=false;fail(e)})}}
+  if(S.view==="home"){bindHome();if(!OV.loaded&&!S.ovLoading){S.ovLoading=true;loadOverview().then(()=>{S.ovLoading=false;render()}).catch(e=>{S.ovLoading=false;OV.loaded=true;fail(e)})}}
   if(S.view==="add")bindAdd();
   if(S.view==="staff"){bindStaff();if(!SD.loaded&&!S.sdLoading){S.sdLoading=true;loadStaff().then(()=>{S.sdLoading=false;render()}).catch(e=>{S.sdLoading=false;fail(e)})}}
   if(S.view==="teach"){bindTeach();if(!TD&&!S.tdLoading){S.tdLoading=true;loadTeachData().then(()=>{S.tdLoading=false;render()}).catch(e=>{S.tdLoading=false;fail(e)})}}
