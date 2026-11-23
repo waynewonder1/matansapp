@@ -1,6 +1,9 @@
 /* Matan Kindergarten learner dashboard.
    Signs in with Supabase, then reads and saves real data. Settings are in config.js. */
 const CFG=window.MATAN_CONFIG;
+// The school's details for printed report cards. config.js can override any of them with SCHOOL: {...}.
+const SCH=Object.assign({name:"Matan Premier Kindergarten",motto:"Where Mastery Begins",address:"Kiamumbi, Quito Street · QS 54",
+  phone:"0712 000 805 · 0721 605 578",email:"matanpremierschools@gmail.com",logo:"logo.jpg"},CFG.SCHOOL||{});
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 
 const AREAS=[
@@ -803,11 +806,11 @@ function parentText(l,c){
   const p=c.parent||{},first=(l.guardian||"").split(" ")[0],fn=l.name.split(" ")[0];
   const bullets=a=>(a||[]).map(x=>"• "+x).join("\n");
   const part=(title,a)=>a&&a.length?`*${title}*\n${bullets(a)}\n\n`:"";
-  return `Hello${first?" "+first:""},\n\nHere is a short update on how ${fn} is doing at Matan Kindergarten.\n\n${p.summary||""}\n\n`
+  return `Hello${first?" "+first:""},\n\nHere is a short update on how ${fn} is doing at ${SCH.name}.\n\n${p.summary||""}\n\n`
     +part("What is going well",p.strengths)
     +(p.support?`*How we are helping*\n${p.support}\n\n`:"")
     +part("Things you can try at home",p.ideas)
-    +`Please talk to me if you have any questions.\n\nWarm regards,\n${ME.name}\nMatan Kindergarten`;
+    +`Please talk to me if you have any questions.\n\nWarm regards,\n${ME.name}\n${SCH.name}`;
 }
 function aiList(a){return Array.isArray(a)&&a.length?`<ul style="margin:4px 0 10px">${a.map(x=>`<li>${esc(typeof x==="string"?x:(x.area?x.area+": ":"")+(x.activity||""))}</li>`).join("")}</ul>`:""}
 function aiSugg(a){
@@ -1524,6 +1527,8 @@ async function probeStage3(){
   try{await run(sb.from("check_records").select("id").limit(1));await run(sb.from("assessment_notes").select("id").limit(1));await run(sb.from("report_comments").select("term_id").limit(1));CHK_OK=true}catch(e){}
   try{await run(sb.from("curriculum_items").select("id").limit(1));await run(sb.from("curriculum_coverage").select("id").limit(1));COV_OK=true}catch(e){}
 }
+// The director's name for the report card signature line (left blank if the account is just called "Director").
+const STAFFHEAD=()=>{const h=STAFFROWS.find(x=>x.role==="head");return h&&!/^director$/i.test(h.name.trim())?h.name:""};
 const termIdOf=label=>{const k=Object.keys(TERMID).find(k=>TERMID[k]===label);return k===undefined?null:Number(k)};
 
 /* ----- curriculum tick-off ----- */
@@ -1717,7 +1722,11 @@ function repView(){
   const total=COV_OK&&CIDONE?CI.filter(i=>i.cls===l.cls).length:0;
   const edT=canEdit(l)&&CHK_OK,edH=isHead()&&CHK_OK,aiOk=edT&&(l.aic||hasAIConsent(l));
   const nChecks=(l.chk||[]).filter(b=>b.t===tid).length;
-  const card=`<div class="rcard" id="rcard"><div class="rc-h"><h2>Matan Kindergarten</h2><p>Termly report card · ${esc(label)}</p></div>
+  const nextT=TERMS[TERMS.indexOf(label)+1]||"";
+  const card=`<div class="rcard" id="rcard"><div class="rc-h">${SCH.logo?`<img class="rc-logo" src="${esc(SCH.logo)}" alt="${esc(SCH.name)} logo">`:""}
+    <div class="rc-school"><h2>${esc(SCH.name)}</h2>${SCH.motto?`<p class="rc-motto">${esc(SCH.motto)}</p>`:""}
+    <p class="rc-contact">${[SCH.address,SCH.phone,SCH.email].filter(Boolean).map(esc).join("<br>")}</p></div></div>
+   <p class="rc-title">Termly Report Card · ${esc(label)}</p>
    <dl class="facts"><div><dt>Learner</dt><dd>${esc(l.name)}</dd></div><div><dt>Class</dt><dd>${l.cls}</dd></div><div><dt>Class teacher</dt><dd>${esc(TEACH[l.cls]||"")}</dd></div><div><dt>Age</dt><dd>${l.age!==null?l.age+" years":"—"}</dd></div><div><dt>Attendance</dt><dd>${l.att!==null?l.att+"%":"Not recorded"}</dd></div></dl>
    <table><thead><tr><th>Learning area</th><th>Score (0 to 5)</th><th>KICD level</th>${pv?"<th>Last term</th>":""}</tr></thead><tbody>
    ${AR(l.cls).map(a=>{const x=kicd(sc[a.k]);return `<tr><td>${esc(a.full)}</td><td>${cell(sc[a.k])}</td><td>${x.c} <span class="muted">${x.t}</span></td>${pv?`<td>${cell(pv[a.k])}</td>`:""}</tr>`}).join("")}
@@ -1727,7 +1736,11 @@ function repView(){
    ${nChecks?`<p class="muted" style="font-size:.85rem">${nChecks} small check${nChecks===1?"":"s"} were done this term. They help the teacher plan and are not part of the scores above.</p>`:""}
    <h3>Class teacher’s comment</h3><p id="rc_t_out" class="rc-c">${rc&&rc.t?esc(rc.t):'<span class="muted">—</span>'}</p>
    <h3>Director’s comment</h3><p id="rc_h_out" class="rc-c">${rc&&rc.h?esc(rc.h):'<span class="muted">—</span>'}</p>
-   <div class="sign"><span>Class teacher: ____________________</span><span>Director: ____________________</span><span>Parent: ____________________</span></div></div>`;
+   <div class="sign">
+    <div><div class="sl"></div><b>Class teacher</b><span class="muted who">${esc(TEACH[l.cls]&&TEACH[l.cls]!=="Not assigned"?TEACH[l.cls]:"")}</span><div class="sd">Date: ______________</div></div>
+    <div><div class="sl"></div><b>Director</b><span class="muted who">${esc(STAFFHEAD()||"")}</span><div class="sd">Date: ______________</div></div>
+    <div><div class="sl"></div><b>Parent or guardian</b><span class="muted who"></span><div class="sd">Date: ______________</div></div></div>
+   <div class="rc-foot"><span>School stamp</span><span>${nextT?`Next term (${esc(nextT)}) begins: ______________`:"Next term begins: ______________"}</span><span>Printed ${fmtDate(Date.now())}</span></div></div>`;
   const edit=`<div class="panel noprint"><h2>Term and comments</h2>
    <p><label class="muted">Term<br><select id="rp_t">${labels.slice().reverse().map(x=>`<option ${x===label?"selected":""}>${esc(x)}</option>`).join("")}</select></label>
    <button class="primary" id="rp_print" style="margin:0 0 0 12px">Print or save as PDF</button></p>
@@ -1756,7 +1769,10 @@ function bindRep(){
   m.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>{S.rcls=b.dataset.rc;S.rsel=null;S.rterm=null;render()});
   const pl=$("rp_l");if(pl)pl.onchange=()=>{S.rsel=pl.value||null;S.rterm=null;S.rmsg="";render()};
   const pt=$("rp_t");if(pt)pt.onchange=()=>{S.rterm=pt.value;S.rmsg="";render()};
-  const pr=$("rp_print");if(pr)pr.onclick=()=>window.print();
+  const pr=$("rp_print");if(pr)pr.onclick=()=>{
+    const l=byId(S.rsel),old=document.title,lab=l&&(l.labels.includes(S.rterm)?S.rterm:l.labels[l.labels.length-1]);
+    if(l)document.title=`Report card - ${l.name} - ${lab}`;  // becomes the PDF file name
+    window.print();setTimeout(()=>{document.title=old},500)};
   const t=$("rc_t"),h=$("rc_h");
   const live=(el,out)=>{if(el)el.oninput=()=>{const o=$(out);if(o)o.textContent=el.value||"—"}};live(t,"rc_t_out");live(h,"rc_h_out");
   const l=byId(S.rsel);if(!l||!has(l))return;
