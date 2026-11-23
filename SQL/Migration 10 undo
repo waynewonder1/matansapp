@@ -1,0 +1,106 @@
+-- UNDO for migration 10: puts back the rules from before it (any staff login can read every class).
+-- Only use this if migration 10 causes a problem you cannot fix straight away. Run the whole file in the SQL Editor.
+
+drop policy if exists add_insights on public.ai_insights;
+create policy add_insights on public.ai_insights as PERMISSIVE for INSERT to authenticated
+  with check ((staff_role() IS NOT NULL));
+drop policy if exists read_ai_insights on public.ai_insights;
+create policy read_ai_insights on public.ai_insights as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+drop policy if exists review_insights on public.ai_insights;
+create policy review_insights on public.ai_insights as PERMISSIVE for UPDATE to authenticated
+  using ((staff_role() IS NOT NULL))
+  with check ((staff_role() IS NOT NULL));
+drop policy if exists notes_read on public.assessment_notes;
+create policy notes_read on public.assessment_notes as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists add_records on public.assessment_records;
+create policy add_records on public.assessment_records as PERMISSIVE for INSERT to authenticated
+  with check (((rater_id = auth.uid()) AND (rater_role =
+CASE staff_role()
+    WHEN 'head'::text THEN 'director'::text
+    ELSE 'teacher'::text
+END) AND ((revision_of IS NULL) OR (EXISTS ( SELECT 1
+   FROM assessment_records o
+  WHERE ((o.id = assessment_records.revision_of) AND (o.rater_id = auth.uid())))))));
+drop policy if exists read_assessment_records on public.assessment_records;
+create policy read_assessment_records on public.assessment_records as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+drop policy if exists read_attendance on public.attendance;
+create policy read_attendance on public.attendance as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+drop policy if exists staff_writes_attendance on public.attendance;
+create policy staff_writes_attendance on public.attendance as PERMISSIVE for ALL to authenticated
+  using ((staff_role() IS NOT NULL))
+  with check ((staff_role() IS NOT NULL));
+drop policy if exists checks_read on public.check_records;
+create policy checks_read on public.check_records as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists cur_cov_add on public.curriculum_coverage;
+create policy cur_cov_add on public.curriculum_coverage as PERMISSIVE for INSERT to authenticated
+  with check (matan_is_staff());
+drop policy if exists cur_cov_del on public.curriculum_coverage;
+create policy cur_cov_del on public.curriculum_coverage as PERMISSIVE for DELETE to authenticated
+  using (matan_is_staff());
+drop policy if exists add_actions on public.follow_up_actions;
+create policy add_actions on public.follow_up_actions as PERMISSIVE for INSERT to authenticated
+  with check (((staff_role() IS NOT NULL) AND (created_by = auth.uid())));
+drop policy if exists read_actions on public.follow_up_actions;
+create policy read_actions on public.follow_up_actions as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+drop policy if exists progress_read on public.goal_progress;
+create policy progress_read on public.goal_progress as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists read_guardians on public.guardians;
+create policy read_guardians on public.guardians as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+drop policy if exists accom_read on public.learner_accommodations;
+create policy accom_read on public.learner_accommodations as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists consents_read on public.learner_consents;
+create policy consents_read on public.learner_consents as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists goals_read on public.learner_goals;
+create policy goals_read on public.learner_goals as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists needs_read on public.learner_needs;
+create policy needs_read on public.learner_needs as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists lqr_read on public.learner_question_records;
+create policy lqr_read on public.learner_question_records as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists lq_read on public.learner_questions;
+create policy lq_read on public.learner_questions as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists profiles_read on public.learner_support_profiles;
+create policy profiles_read on public.learner_support_profiles as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists tiers_read on public.learner_tiers;
+create policy tiers_read on public.learner_tiers as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists read_learners on public.learners;
+create policy read_learners on public.learners as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+drop policy if exists add_parent_messages on public.parent_messages;
+create policy add_parent_messages on public.parent_messages as PERMISSIVE for INSERT to authenticated
+  with check (((staff_role() IS NOT NULL) AND (staff_id = auth.uid())));
+drop policy if exists read_parent_messages on public.parent_messages;
+create policy read_parent_messages on public.parent_messages as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+drop policy if exists rc_read on public.report_comments;
+create policy rc_read on public.report_comments as PERMISSIVE for SELECT to authenticated
+  using (matan_is_staff());
+drop policy if exists read_reviews on public.score_reviews;
+create policy read_reviews on public.score_reviews as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+drop policy if exists add_own_notes on public.teacher_notes;
+create policy add_own_notes on public.teacher_notes as PERMISSIVE for INSERT to authenticated
+  with check ((staff_id = auth.uid()));
+drop policy if exists read_teacher_notes on public.teacher_notes;
+create policy read_teacher_notes on public.teacher_notes as PERMISSIVE for SELECT to authenticated
+  using ((staff_role() IS NOT NULL));
+
+alter view public.area_scores reset (security_invoker);
+alter view public.rater_agreement reset (security_invoker);
+
+notify pgrst, 'reload schema';

@@ -6,34 +6,41 @@
 -- IMPORTANT: a teacher who is not assigned to a class (Staff page) will see no children after this.
 -- Check every class teacher is assigned before running it.
 --
--- "Their own class" uses the same rule the app already uses for changes: public.matan_can_edit_learner(learner_id),
--- which is true for the director, the senior teacher, and the teacher of that child's class (classes.teacher_id).
+-- "Their own class" means: the director, the senior teacher, or the teacher of that child's class (classes.teacher_id).
+-- If you ran an older copy of this file and sign-in timed out, run this whole file again: it replaces the slow rules.
+
+-- Fast form: each rule works out "the children in my class" ONCE per query, then compares against that list.
+-- (Calling a function for every row made sign-in time out once there were many assessment rows.)
+create or replace function public.matan_my_learner_ids()
+returns setof uuid language sql stable security definer set search_path = public as $$
+  select l.id from learners l join classes c on c.id = l.class_id where c.teacher_id = auth.uid();
+$$;
 
 -- ---------- learners and guardians ----------
 drop policy if exists read_learners on learners;
 create policy read_learners on learners for select to authenticated
-  using (public.matan_is_admin() or exists (select 1 from classes c where c.id = learners.class_id and c.teacher_id = auth.uid()));
+  using ((select public.matan_is_admin()) or id in (select public.matan_my_learner_ids()));
 
 drop policy if exists read_guardians on guardians;
 create policy read_guardians on guardians for select to authenticated
-  using (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 
 -- ---------- term assessments ----------
 drop policy if exists read_assessment_records on assessment_records;
 create policy read_assessment_records on assessment_records for select to authenticated
-  using (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 
 drop policy if exists add_records on assessment_records;
 create policy add_records on assessment_records for insert to authenticated
   with check (
-    public.matan_can_edit_learner(learner_id)
+    ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()))
     and rater_id = auth.uid()
     and rater_role = case public.staff_role() when 'head' then 'director' else 'teacher' end
     and (revision_of is null or exists (select 1 from assessment_records o where o.id = assessment_records.revision_of and o.rater_id = auth.uid())));
 
 drop policy if exists read_reviews on score_reviews;
 create policy read_reviews on score_reviews for select to authenticated
-  using (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 
 -- The score views read the tables above with the viewer's own rights, so they follow the same rules.
 alter view public.area_scores set (security_invoker = true);
@@ -42,73 +49,73 @@ alter view public.rater_agreement set (security_invoker = true);
 -- ---------- attendance (children) ----------
 drop policy if exists read_attendance on attendance;
 create policy read_attendance on attendance for select to authenticated
-  using (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 
 drop policy if exists staff_writes_attendance on attendance;
 create policy staff_writes_attendance on attendance for all to authenticated
-  using (public.matan_can_edit_learner(learner_id))
-  with check (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()))
+  with check ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 
 -- ---------- notes, insights, messages, follow-ups ----------
 drop policy if exists read_teacher_notes on teacher_notes;
 create policy read_teacher_notes on teacher_notes for select to authenticated
-  using (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists add_own_notes on teacher_notes;
 create policy add_own_notes on teacher_notes for insert to authenticated
-  with check (staff_id = auth.uid() and public.matan_can_edit_learner(learner_id));
+  with check (staff_id = auth.uid() and ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids())));
 
 drop policy if exists read_ai_insights on ai_insights;
 create policy read_ai_insights on ai_insights for select to authenticated
-  using (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists add_insights on ai_insights;
 create policy add_insights on ai_insights for insert to authenticated
-  with check (public.matan_can_edit_learner(learner_id));
+  with check ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists review_insights on ai_insights;
 create policy review_insights on ai_insights for update to authenticated
-  using (public.matan_can_edit_learner(learner_id))
-  with check (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()))
+  with check ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 
 drop policy if exists read_parent_messages on parent_messages;
 create policy read_parent_messages on parent_messages for select to authenticated
-  using (public.matan_can_edit_learner(learner_id));
+  using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists add_parent_messages on parent_messages;
 create policy add_parent_messages on parent_messages for insert to authenticated
-  with check (staff_id = auth.uid() and public.matan_can_edit_learner(learner_id));
+  with check (staff_id = auth.uid() and ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids())));
 
 drop policy if exists read_actions on follow_up_actions;
 create policy read_actions on follow_up_actions for select to authenticated
-  using (public.matan_can_edit_learner(learner_id) or owner_id = auth.uid());
+  using (((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids())) or owner_id = (select auth.uid()));
 drop policy if exists add_actions on follow_up_actions;
 create policy add_actions on follow_up_actions for insert to authenticated
-  with check (created_by = auth.uid() and public.matan_can_edit_learner(learner_id));
+  with check (created_by = auth.uid() and ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids())));
 
 -- ---------- support plans, needs, consents, goals, tiers ----------
 drop policy if exists consents_read on learner_consents;
-create policy consents_read on learner_consents for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy consents_read on learner_consents for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists profiles_read on learner_support_profiles;
-create policy profiles_read on learner_support_profiles for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy profiles_read on learner_support_profiles for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists needs_read on learner_needs;
-create policy needs_read on learner_needs for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy needs_read on learner_needs for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists accom_read on learner_accommodations;
-create policy accom_read on learner_accommodations for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy accom_read on learner_accommodations for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists goals_read on learner_goals;
-create policy goals_read on learner_goals for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy goals_read on learner_goals for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists progress_read on goal_progress;
-create policy progress_read on goal_progress for select to authenticated using (public.matan_can_edit_learner(public.matan_goal_learner(goal_id)));
+create policy progress_read on goal_progress for select to authenticated using ((select public.matan_is_admin()) or goal_id in (select g.id from learner_goals g where g.learner_id in (select public.matan_my_learner_ids())));
 drop policy if exists lq_read on learner_questions;
-create policy lq_read on learner_questions for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy lq_read on learner_questions for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists lqr_read on learner_question_records;
-create policy lqr_read on learner_question_records for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy lqr_read on learner_question_records for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists tiers_read on learner_tiers;
-create policy tiers_read on learner_tiers for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy tiers_read on learner_tiers for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 
 -- ---------- small checks, insights after checks, report comments ----------
 drop policy if exists checks_read on check_records;
-create policy checks_read on check_records for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy checks_read on check_records for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists notes_read on assessment_notes;
-create policy notes_read on assessment_notes for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy notes_read on assessment_notes for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 drop policy if exists rc_read on report_comments;
-create policy rc_read on report_comments for select to authenticated using (public.matan_can_edit_learner(learner_id));
+create policy rc_read on report_comments for select to authenticated using ((select public.matan_is_admin()) or learner_id in (select public.matan_my_learner_ids()));
 
 -- ---------- curriculum ticks: only for your own class ----------
 create or replace function public.matan_can_edit_class(cls text)
