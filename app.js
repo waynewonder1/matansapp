@@ -1072,13 +1072,16 @@ function touchLine(q,head){
   if(q.tp)return `<br>✋ <b>Touch:</b> ${esc(q.tp)} <span class="tag warn">AI draft, waiting for approval</span>${head?" "+bbtn(`data-tap="${q.id}"`,"Approve touch")+" "+bbtn(`data-et="${q.id}"`,"Edit touch")+" "+bbtn(`data-trm="${q.id}"`,"Remove touch"):""}`;
   return needsSight(q)?`<br><span class="tag warn">Needs sight: no touch version</span> <span class="muted">Blind learners get NA here.</span>${head?" "+bbtn(`data-et="${q.id}"`,"Add touch version"):""}`:"";
 }
+// The page in the curriculum design for a question's sub-strand, when the name matches one in the curriculum list.
+const nm=t=>String(t||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+function subPdf(c,a,sub){if(!PDF_OK||!sub)return "";const i=ciFor(c,a).find(x=>x.pdf_page&&nm(x.name)===nm(sub));return i?" "+pdfBtn(c,i.pdf_page,"p. "+i.pdf_page,"Open the curriculum design at page "+i.pdf_page):""}
 function bankView(){
   const c=pickCls(S.cls),ba=S.ba||0,qs=Q[c][ba],noq=NOQ[c][ba],head=isAdmin(),nt=TOUCH_OK?noTouch(c,ba):[];
   const btn=bbtn;
   return `<p class="muted" style="margin-top:0">Questions come from the KICD 2024 curriculum and from teachers. Imported questions start as drafts: the director or senior teacher edits and approves them before they are used in assessments. Outcomes with no question yet are listed under the questions.</p>
   <div class="tools">${visCls().map(x=>`<button class="chip" data-c="${x}" aria-pressed="${c===x}">${x}</button>`).join("")}</div>
   <div class="tabs" role="tablist" aria-label="Learning areas">${AR(c).map(a=>`<button class="tab" role="tab" data-a="${a.k}" aria-selected="${a.k===ba}" tabindex="${a.k===ba?0:-1}">${a.n}</button>`).join("")}</div>
-  <div class="panel"><h2>${AR(c)[ba].full} · ${c}</h2>${qs.length?qs.map(q=>`<div class="nt"><span class="tag ${q.src==="Teacher"?"ok":""}">${q.src}</span> <b>${esc(q.c)}</b>${q.st?" · "+esc(q.st):""}${q.sub?" · "+esc(q.sub):""}<br>
+  <div class="panel"><h2>${AR(c)[ba].full} · ${c}</h2>${PDF_OK&&CIDONE?`<p style="margin:0 0 8px">${pdfBtn(c,pdfFirst(c,ba),"📄 Open the "+c+" curriculum design"+(pdfFirst(c,ba)?" at this area":""))}</p>`:""}${qs.length?qs.map(q=>`<div class="nt"><span class="tag ${q.src==="Teacher"?"ok":""}">${q.src}</span> <b>${esc(q.c)}</b>${q.st?" · "+esc(q.st):""}${q.sub?" · "+esc(q.sub):""}${subPdf(c,ba,q.sub)}<br>
    ${head&&S.eq===q.id?`<textarea id="eqt" rows="2" style="width:100%">${esc(q.a)}</textarea><div style="margin-top:4px"><button class="primary" id="eqsave" style="margin:0 6px 0 0;padding:6px 14px">Save question</button>${btn('id="eqcancel"',"Cancel")}</div>`:`<b>${esc(q.s)}</b> A: ${esc(q.a)}${q.b?`<br>B: ${esc(q.b)}`:""}`}<br><span class="muted">Look for: ${esc(q.l)}${q.ref?" · "+esc(q.ref):""}</span>
    ${touchLine(q,head)}
    ${q.ok===false?`<br><span class="tag warn">Question waiting for approval</span>`:""}${q.ok===false&&head?` ${btn(`data-ap="${q.id}"`,"Approve")} ${btn(`data-eq="${q.id}"`,"Edit")} ${btn(`data-rj="${q.id}"`,"Reject")}`:""}${q.src==="Teacher"&&q.ok===false&&q.by===ME.id?` ${btn(`data-del="${q.id}"`,"Remove")}`:""}</div>`).join(""):'<p class="muted">No questions here yet.</p>'}</div>
@@ -1520,6 +1523,21 @@ function needsPrompt(l){
 // End-of-term exams (assessment_records) are the ONLY thing that feeds the graph, the trend and the report card.
 // Small checks are stored in check_records, so they can never move the graph.
 let CHK_OK=false,COV_OK=false,CI=[],COVR={},CIDONE=false;
+/* ----- curriculum design PDFs (migration 11) ----- */
+// The PDFs are in a private Supabase storage bucket. A link that works for one hour is made when a staff member taps the button.
+let PDF_OK=false;
+const pdfFirst=(c,a)=>{const p=ciFor(c,a).map(i=>i.pdf_page).filter(Boolean);return p.length?Math.min(...p):null};
+const pdfBtn=(c,page,label,title)=>PDF_OK?`<button class="ghost pdfb" data-pdf="${c}" data-pg="${page||""}" title="${esc(title||"Open the "+c+" curriculum design")}">${label}</button>`:"";
+async function openPdf(c,page){
+  const w=window.open("","_blank");  // opened straight away, so the browser does not block it
+  try{
+    const {data,error}=await sb.storage.from("curriculum").createSignedUrl(c+".pdf",3600);
+    if(error||!data)throw new Error(/not.?found/i.test((error&&error.message)||"")?`The ${c} curriculum design could not be found. Either it has not been uploaded yet (in Supabase, open Storage > curriculum and upload it as ${c}.pdf), or this login is not set up as Matan staff.`:((error&&error.message)||"The curriculum design could not be opened."));
+    const url=data.signedUrl+(page?"#page="+page:"");
+    if(w)w.location.href=url;else location.href=url;
+  }catch(e){if(w)w.close();fail(e)}
+}
+function bindPdf(){document.querySelectorAll("[data-pdf]").forEach(b=>b.onclick=e=>{e.preventDefault();e.stopPropagation();openPdf(b.dataset.pdf,+b.dataset.pg||0)})}
 const CHKMAX=5;
 const uniq=a=>[...new Set(a.filter(Boolean))];
 async function probeStage3(){
@@ -1533,7 +1551,8 @@ const termIdOf=label=>{const k=Object.keys(TERMID).find(k=>TERMID[k]===label);re
 
 /* ----- curriculum tick-off ----- */
 async function loadCurr(){
-  const it=await fetchAll("curriculum_items","id,cls,area,code,strand,name,lessons,term,sort","sort");
+  const cols="id,cls,area,code,strand,name,lessons,term,sort";
+  let it;try{it=await fetchAll("curriculum_items",cols+",pdf_page","sort");PDF_OK=true}catch(e){it=await fetchAll("curriculum_items",cols,"sort");PDF_OK=false}
   const cv=await fetchAll("curriculum_coverage","id,item_id,term_id,taught_on,taught_by","created_at");
   CI=it;COVR={};cv.forEach(c=>{COVR[c.item_id]=c});CIDONE=true;
 }
@@ -1554,16 +1573,17 @@ function covView(){
   <div class="tools">${vis.map(x=>`<button class="chip" data-cc="${x}" aria-pressed="${c===x}">${x} · ${esc(TEACH[x]||"")} · ${covPct(CI.filter(y=>y.cls===x))}%</button>`).join("")}</div>
   <div class="tabs" role="tablist" aria-label="Learning areas">${AR(c).map(x=>`<button class="tab" role="tab" data-a="${x.k}" aria-selected="${x.k===a}" tabindex="${x.k===a?0:-1}">${x.n} · ${covPct(ciFor(c,x.k))}%</button>`).join("")}</div>
   <div class="panel"><h2>${esc(AR(c)[a].full)} · ${c}</h2>
+   ${PDF_OK?`<p style="margin:0 0 8px">${pdfBtn(c,pdfFirst(c,a),"📄 Open the "+c+" curriculum design"+(pdfFirst(c,a)?" at this area":""))}</p>`:""}
    <div class="bar" aria-hidden="true" style="margin:0 0 8px"><i style="width:${covPct(items)}%"></i></div>
    <p style="margin:0 0 10px"><b>${covPct(items)}%</b> taught <span class="muted">(${items.filter(i=>COVR[i.id]).length} of ${items.length} sub-strands)</span>
    ${can&&items.some(i=>!COVR[i.id])?` <button class="ghost" id="cov_all" style="margin-left:8px">Mark the whole area taught</button>`:""}</p>
    ${!items.length?`<p class="muted">No sub-strands loaded for this area.</p>`:groups.map(g=>`${g.k?`<h3 style="margin:14px 0 4px;font-size:1rem">${esc(g.k)}</h3>`:""}
     ${g.items.map(i=>{const v=COVR[i.id];return `<label class="acc" style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--line)"><input type="checkbox" data-ci="${i.id}" ${v?"checked":""} ${can?"":"disabled"} aria-label="Taught: ${esc(i.name)}">
-     <span style="flex:1"><b>${esc(i.code)}</b> ${esc(i.name)} <span class="muted">${i.lessons?i.lessons+" lessons":""}${i.term?" · planned Term "+i.term:""}</span>
+     <span style="flex:1"><b>${esc(i.code)}</b> ${esc(i.name)} <span class="muted">${i.lessons?i.lessons+" lessons":""}${i.term?" · planned Term "+i.term:""}</span>${i.pdf_page?" "+pdfBtn(c,i.pdf_page,"p. "+i.pdf_page,"Open the curriculum design at page "+i.pdf_page):""}
      ${v?`<br><span class="tag ok">Taught ${esc(fmtDate(v.taught_on+"T00:00:00"))}${v.term_id&&TERMID[v.term_id]?" · "+esc(TERMID[v.term_id]):""}${v.taught_by&&STAFF[v.taught_by]?" · "+esc(STAFF[v.taught_by]):""}</span>`:""}</span></label>`}).join("")}`).join("")}</div>${overview}`;
 }
 function bindCov(){
-  const m=$("main");
+  const m=$("main");bindPdf();
   m.querySelectorAll("[data-cc]").forEach(b=>b.onclick=()=>{S.ccls=b.dataset.cc;S.carea=0;render()});
   m.querySelectorAll(".tab[data-a]").forEach(b=>b.onclick=()=>{S.carea=+b.dataset.a;rr()});
   m.querySelectorAll("[data-ci]").forEach(b=>b.onchange=async()=>{
@@ -1897,7 +1917,7 @@ function render(){
   if(S.view==="cov"){bindCov();bindTabs();if(COV_OK&&!CIDONE&&!S.covLoading){S.covLoading=true;loadCurr().then(()=>{S.covLoading=false;render()}).catch(e=>{S.covLoading=false;fail(e)})}}
   if(S.view==="rep"){bindRep();ensureRep()}
   if(S.view==="assess"){bindAssess();bindTabs()}
-  if(S.view==="bank"){bindBank();bindTabs()}
+  if(S.view==="bank"){bindBank();bindTabs();bindPdf();if(COV_OK&&!CIDONE&&!S.ciTried){S.ciTried=true;ensureCurr().then(()=>{if(S.view==="bank")rr()})}}
   if(S.view==="att"){bindAtt();
     if(S.attTab==="staff"){if(ATX_OK&&!TA.loaded&&!S.atLoading){S.atLoading=true;if(!TA.date)TA.date=todayStr();loadStaffDay().then(()=>{S.atLoading=false;render()}).catch(e=>{S.atLoading=false;fail(e)})}}
     else if(!AT.loaded&&!S.atLoading){S.atLoading=true;if(!AT.date)AT.date=todayStr();loadDay().then(()=>{S.atLoading=false;render()}).catch(e=>{S.atLoading=false;fail(e)})}}
