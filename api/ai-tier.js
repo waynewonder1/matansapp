@@ -4,8 +4,10 @@
 // Sent to Gemini: the class, age, what the form says about disability, and the typed doctor's report.
 // The app removes the child's and guardian's names and phone numbers from the report before it is sent, and this function
 // removes phone numbers and email addresses again. Nothing is sent unless the guardian's AI consent is on file.
+// This function also looks up the child's and guardians' names and removes them, in case the browser missed one.
 // The AI only suggests. The director or senior teacher confirms the tier in the app.
 
+const { namesFor, redact } = require("./_privacy");
 const GEMINI = process.env.GEMINI_API_BASE || "https://generativelanguage.googleapis.com/v1beta/models";
 const NEEDS = ["visual", "hearing", "physical", "intellectual", "speech_language", "other"];
 const clip = (v, n) => String(v == null ? "" : v).replace(/[ \t]+/g, " ").trim().slice(0, n);
@@ -85,11 +87,12 @@ module.exports = async function handler(req, res) {
     if (!staff.ok || !staff.json.length) return send(403, { error: "This login is not set up as Matan staff." });
     const consent = await sb("/rest/v1/learner_consents?select=id&limit=1&kind=eq.gemini&withdrawn_on=is.null&learner_id=eq." + lid, token);
     if (!consent.ok || !consent.json.length) return send(403, { error: "No guardian consent for AI planning is recorded for this child." });
+    const names = await namesFor(lid, (p) => sb(p, token));
     const out = cleanOutput(await gemini({
       class: ["PG", "PP1", "PP2"].includes(body.class) ? body.class : null,
       age: Number.isInteger(body.age) && body.age >= 1 && body.age <= 12 ? body.age : null,
       form_says: ["none", "some", "severe"].includes(body.declared) ? body.declared : null,
-      report,
+      report: redact(report, names),
     }));
     if (!out) return send(502, { error: "The AI did not give a usable answer. Please try again, or choose the tier yourself." });
     return send(200, out);

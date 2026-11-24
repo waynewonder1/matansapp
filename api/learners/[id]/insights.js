@@ -4,8 +4,9 @@
 //
 // The request runs as the signed-in staff member, so the database rules apply to it.
 // Sent to Gemini: class, age, attendance percent, scores per learning area and short teacher comments. No name, no phone number,
-// no guardian details. Nothing is sent unless the guardian's AI consent is on file for the child.
+// no guardian details: the child's and guardians' names are removed from the comments (api/_privacy.js). Nothing is sent unless the guardian's AI consent is on file for the child.
 
+const { namesFor, redact } = require("../../_privacy");
 const GEMINI = process.env.GEMINI_API_BASE || "https://generativelanguage.googleapis.com/v1beta/models";
 const list = (v) => (Array.isArray(v) ? v : []);
 const clip = (v, n) => String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, n);
@@ -113,13 +114,14 @@ module.exports = async function handler(req, res) {
     if (!lr.ok || !lr.json.length) return send(404, { error: "Learner not found." });
     if (![terms, areas, scores, comments, att].every((x) => x.ok)) return send(502, { error: "Could not read this learner's records." });
     const learner = lr.json[0];
+    const names = await namesFor(id, get);
     const areaName = Object.fromEntries(areas.json.map((a) => [a.id, a.name]));
     const history = terms.json
       .map((t) => ({
         id: t.id,
         label: t.label,
         scores: Object.fromEntries(scores.json.filter((s) => s.term_id === t.id).map((s) => [areaName[s.area_id], s.score])),
-        notes: comments.json.filter((c) => c.term_id === t.id).map((c) => scrub(c.comment)),
+        notes: comments.json.filter((c) => c.term_id === t.id).map((c) => redact(scrub(c.comment), names)),
       }))
       .filter((t) => Object.keys(t.scores).length > 0);
     if (!history.length) return send(400, { error: "No scores yet for this learner." });

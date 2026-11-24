@@ -1447,6 +1447,71 @@ function bindTeach(){
   document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>{S.sel=b.dataset.open;S.view="profile";S.err="";render()});
 }
 
+/* ---------- data backup (director) ---------- */
+// Supabase's free plan keeps no backups, so the director downloads one here, at least once a month.
+// The file holds every record, including health information, so it is locked with a password (AES-256-GCM, key from
+// PBKDF2-SHA256). SQL/backup/make-restore.py opens it and turns it into a restore file for a new database.
+// Every table, with a sort order that is unique, so reading in pages of 1,000 never skips or repeats a row.
+const BK_TABLES=[["staff",["id"]],["classes",["id"]],["learners",["id"]],["guardians",["id"]],["learning_areas",["id"]],["terms",["id"]],["competencies",["id"]],
+ ["question_variants",["id"]],["assessment_records",["id"]],["teacher_notes",["id"]],["attendance",["learner_id","day"]],["ai_insights",["id"]],["audit_log",["id"]],
+ ["parent_messages",["id"]],["follow_up_actions",["id"]],["score_reviews",["id"]],["learner_consents",["id"]],["learner_support_profiles",["learner_id"]],
+ ["learner_health_notes",["learner_id"]],["learner_needs",["id"]],["learner_accommodations",["id"]],["learner_goals",["id"]],["goal_progress",["id"]],
+ ["learner_questions",["id"]],["learner_question_records",["id"]],["staff_attendance",["id"]],["learner_tiers",["learner_id"]],["learner_reports",["learner_id"]],
+ ["curriculum_items",["id"]],["curriculum_coverage",["id"]],["check_records",["id"]],["assessment_notes",["id"]],["report_comments",["learner_id","term_id"]]];
+const BK={busy:false,msg:"",err:"",done:""};
+const lastBackup=()=>{try{return localStorage.getItem("matan_last_backup")||""}catch(e){return ""}};
+const backupDue=()=>{const d=lastBackup();return !d||daysSince(d)>30};
+async function bkRead(t,ord){
+  let out=[],i=0;
+  for(;;){let q=sb.from(t).select("*");ord.forEach(o=>{q=q.order(o)});const d=await run(q.range(i,i+999));out=out.concat(d);if(d.length<1000)return out;i+=1000}
+}
+function backupPanel(){
+  if(!isHead())return "";
+  const d=lastBackup();
+  return `<div class="panel" id="backup"><h2>Data backup</h2>
+  <p class="muted" style="margin-top:0">Supabase’s free plan keeps <b>no backups</b>. If the database is lost or damaged, this file is the only copy of the children’s records. Download one at least once a month, and before any big change.</p>
+  <ul class="muted" style="margin:0 0 10px 18px;padding:0">
+   <li>The file holds every child’s records, including health information, so it is locked with a password you choose here.</li>
+   <li>Keep the password somewhere safe and separate from the file. <b>Without it the backup cannot be opened, by anyone.</b></li>
+   <li>Keep the file on the school computer or a USB stick that is locked away. Never send it by WhatsApp or email. Delete old copies you no longer need.</li></ul>
+  <p style="margin:0 0 8px">${d?`Last backup on this computer: <b>${esc(fmtDate(d))}</b>${backupDue()?' <span class="tag warn">due</span>':""}`:'<span class="tag warn">No backup downloaded on this computer yet</span>'}</p>
+  <div class="facts" style="max-width:560px;margin:0 0 10px">
+   <label class="muted">Backup password (at least 10 characters)<br><input type="password" id="bk_pw" autocomplete="new-password" style="width:100%"></label>
+   <label class="muted">Type it again<br><input type="password" id="bk_pw2" autocomplete="new-password" style="width:100%"></label></div>
+  <button class="primary" id="bk_go" ${BK.busy?"disabled":""}>${BK.busy?"Making the backup…":"Download a locked backup"}</button>
+  ${BK.msg?`<p class="muted" role="status">${esc(BK.msg)}</p>`:""}${BK.err?`<div class="note watch" role="alert">${esc(BK.err)}</div>`:""}${BK.done?`<div class="note good" role="status">${esc(BK.done)}</div>`:""}</div>`;
+}
+function bkShow(){const p=$("backup");if(p){p.outerHTML=backupPanel();bindBackup()}}
+function bindBackup(){
+  const b=$("bk_go");if(!b)return;
+  b.onclick=async()=>{
+    const pw=$("bk_pw").value,pw2=$("bk_pw2").value;
+    BK.err="";BK.done="";
+    if(pw.length<10){BK.err="Choose a password of at least 10 characters.";bkShow();return}
+    if(pw!==pw2){BK.err="The two passwords are not the same. Type them again.";bkShow();return}
+    if(BK.busy)return;BK.busy=true;BK.msg="Reading the records…";bkShow();
+    try{
+      const tables={},counts={};
+      for(const [t,ord] of BK_TABLES){BK.msg=`Reading ${t.replace(/_/g," ")}…`;bkShow();tables[t]=await bkRead(t,ord);counts[t]=tables[t].length}
+      BK.msg="Locking the file…";bkShow();
+      const made=new Date().toISOString(),enc=new TextEncoder();
+      const plain=enc.encode(JSON.stringify({format:"matan-backup",version:1,made_at:made,made_by:ME.name,tables}));
+      const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),iterations=310000;
+      const base=await crypto.subtle.importKey("raw",enc.encode(pw),"PBKDF2",false,["deriveKey"]);
+      const key=await crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations,hash:"SHA-256"},base,{name:"AES-GCM",length:256},false,["encrypt"]);
+      const ct=new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM",iv},key,plain));
+      const b64=u=>{let s="";for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)};
+      // Only the table sizes are readable without the password, so the file can be checked without opening it.
+      const file={format:"matan-backup-locked",version:1,made_at:made,cipher:"AES-256-GCM",kdf:"PBKDF2-SHA256",iterations,salt:b64(salt),iv:b64(iv),counts,data:b64(ct)};
+      const name=`matan-backup-${todayStr()}${DEMO?"-DEMO":""}.json`,url=URL.createObjectURL(new Blob([JSON.stringify(file)],{type:"application/json"}));
+      const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+      if(!DEMO){try{localStorage.setItem("matan_last_backup",made)}catch(e){}}
+      BK.done=`Saved ${name}: ${counts.learners} learners, ${counts.assessment_records} assessment records, ${counts.attendance} attendance marks. Move it from Downloads to a safe place now.`;
+    }catch(e){BK.err="The backup could not be made: "+((e&&e.message)||e)+". Nothing was saved. Please try again."}
+    finally{BK.busy=false;BK.msg="";bkShow();const p1=$("bk_pw");if(p1)p1.value=""}
+  };
+}
+
 /* ---------- staff (director) ---------- */
 // The director adds teachers and sets roles. Creating a login needs the api/staff.js function on Vercel.
 const SD={rows:[],loaded:false,msg:"",cred:null,row:null,add:{name:"",email:"",phone:"",role:"teacher",cls:"",pw:""}};
@@ -1484,9 +1549,10 @@ function staffView(){
    <button class="primary" id="s_add">Add staff member</button> <span class="muted">Class: the class this person teaches, if any. The director and senior teacher see every class either way.</span></div>
   <div class="panel"><h2>Staff</h2>${!SD.loaded?'<p class="muted">Loading…</p>':`<div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Class</th><th></th></tr></thead><tbody>
    ${SD.rows.map(r=>`<tr><td><b>${esc(r.name)}</b>${r.id===ME.id?' <span class="muted">(you)</span>':""}${r.phone?`<br><span class="muted">${esc(r.phone)}</span>`:""}</td><td>${roleSel(r.id,r.role,r.id===ME.id)}</td><td>${clsSel(r.id,clsOf(r.id))}</td>
-    <td><button class="ghost" data-ssave="${r.id}" ${S.saving?"disabled":""}>${SD.row&&SD.row.id===r.id&&SD.row.busy==="save"?"Saving…":"Save"}</button> <button class="ghost" data-spw="${r.id}" ${S.saving?"disabled":""}>${SD.row&&SD.row.id===r.id&&SD.row.busy==="pw"?"Making…":"New password"}</button>${staffRowNote(r)}</td></tr>`).join("")}</tbody></table></div>`}</div>`;
+    <td><button class="ghost" data-ssave="${r.id}" ${S.saving?"disabled":""}>${SD.row&&SD.row.id===r.id&&SD.row.busy==="save"?"Saving…":"Save"}</button> <button class="ghost" data-spw="${r.id}" ${S.saving?"disabled":""}>${SD.row&&SD.row.id===r.id&&SD.row.busy==="pw"?"Making…":"New password"}</button>${staffRowNote(r)}</td></tr>`).join("")}</tbody></table></div>`}</div>`+backupPanel();
 }
 function bindStaff(){
+  bindBackup();
   const keep=()=>{const g=id=>($(id)||{}).value||"";SD.add={name:g("s_name"),email:g("s_email"),phone:g("s_phone"),role:g("s_role")||"teacher",cls:g("s_cls"),pw:g("s_pw")}};
   ["s_name","s_email","s_phone","s_role","s_cls","s_pw"].forEach(id=>{const e=$(id);if(e)e.onchange=keep});
   const cd=$("creddone");if(cd)cd.onclick=()=>{SD.cred=null;render()};
@@ -1896,6 +1962,7 @@ function homeView(){
   if(AI_OK&&aiPend)todo.push([`${aiPend} AI suggestion${aiPend===1?"":"s"} (goals or questions) waiting for a teacher to approve.`,go(isHead()?"teach":"list","See which")]);
   if(TIER_OK){const nt=L.filter(l=>!tierSet(l)).length;if(nt)todo.push([`${nt} learner${nt===1?" has":"s have"} no confirmed support tier.`,go("list","Learners")])}
   if(SUP_OK&&AI_OK&&MONTH_OK){const mt=monthTodo().length;if(mt)todo.push([`${mt} child${mt===1?" has":"ren have"} no plan for ${esc(monthName())} yet. They are made automatically after sign-in.`,go("list","Learners")])}
+  if(isHead()&&!DEMO&&backupDue())todo.push([lastBackup()?`The last data backup on this computer was ${esc(fmtDate(lastBackup()))}. Download a new one (at least monthly).`:"No data backup has been downloaded on this computer yet. Supabase’s free plan keeps none.",go("staff","Staff page")]);
   const notDone=L.filter(l=>!done(l)).length;if(CUR&&notDone)todo.push([`${notDone} of ${L.length} learners are not fully assessed for ${esc(CUR)} yet.`,go("queue","Assessment")]);
 
   let h=`<div class="panel"><h2 style="margin-bottom:2px">Overview</h2><p class="muted" style="margin:0">${esc(when)} · ${esc(CUR||"No term set")}</p></div>

@@ -6,7 +6,9 @@
 // and whether the guardian has signed the AI consent for this child. Without both, nothing is sent to Gemini.
 // Only these fields ever reach Gemini: class, age, pathway, types of need, accommodations, scores,
 // current goals and earlier individual questions. Never a name, a note, a health note or guardian details.
+// Goals and questions are typed by people, so the child's and guardians' names are removed from them here too (api/_privacy.js).
 
+const { namesFor, redact } = require("./_privacy");
 const GEMINI = process.env.GEMINI_API_BASE || "https://generativelanguage.googleapis.com/v1beta/models";
 const NEEDS = ["visual", "hearing", "physical", "intellectual", "speech_language", "other"];
 const PATHWAYS = ["regular", "regular_adapted", "specialised_foundation", "specialised_intermediate"];
@@ -164,6 +166,10 @@ module.exports = async function handler(req, res) {
     const consent = await sb("/rest/v1/learner_consents?select=id&limit=1&kind=eq.gemini&withdrawn_on=is.null&learner_id=eq." + lid, token);
     if (!consent.ok || !consent.json.length) return send(403, { error: "No guardian consent for AI planning is recorded for this child." });
     const clean = cleanPayload(body.payload);
+    const names = await namesFor(lid, (p) => sb(p, token));
+    clean.current_goals.forEach((g) => { g.goal = redact(g.goal, names); });
+    clean.question_results.forEach((q) => { q.prompt = redact(q.prompt, names); });
+    clean.existing_questions = clean.existing_questions.map((x) => redact(x, names));
     const out = cleanOutput(await gemini(clean), clean.need_types);
     if (!out.goals.length && !out.questions.length) return send(502, { error: "The AI did not give usable suggestions. Please try again." });
     return send(200, out);

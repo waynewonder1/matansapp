@@ -1,1 +1,11 @@
+# Files Vercel does NOT upload, so they cannot be opened on the website.
+# They stay in the repo (GitHub) for the school's own use.
+# The database structure, migrations and backup scripts: no children's data, but no reason for the public to read them.
 matan-backend
+SQL
+docs
+README.md
+*.py
+*.csv
+*.json.enc
+matan-backup-*

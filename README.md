@@ -41,7 +41,7 @@ Each month the AI drafts every consenting child's goals and individual test agai
 
 ## Privacy
 
-Nothing that identifies a child (name, phone number, diagnosis, notes, doctor's report) is sent to the AI. AI features only run when the guardian's signed consent is recorded. The AI only drafts: a teacher reads and approves everything. Children's health information is sensitive under the Kenya Data Protection Act 2019, so have the school's consent forms and doctor's-report handling checked by someone qualified.
+No child's or guardian's name, phone number, email or ID number is sent to the AI: the server removes them from any typed text first (`api/_privacy.js`). The support-tier suggestion does send the doctor's report with those details removed, because that is what it reads. AI features only run when the guardian's AI consent is recorded, and the server checks it. The AI only drafts: a teacher reads and approves everything. Children's health information is sensitive under the Kenya Data Protection Act 2019. See `docs/privacy-review.md` for the full review and the school's to-do list (ODPC registration, Gemini paid tier, consent forms, retention).
 
 ## Problems
 
@@ -52,6 +52,10 @@ Nothing that identifies a child (name, phone number, diagnosis, notes, doctor's 
 - No "Open the curriculum design" button on the Curriculum page: run `SQL/Migration 11 curriculum PDFs`. If the button says the design "has not been uploaded yet", upload `PG.pdf`, `PP1.pdf` and `PP2.pdf` in Supabase under Storage > curriculum. The bucket is private, so only signed-in staff can open them.
 
 ## Backups
+
+**Children's records (do this monthly).** Supabase's free plan keeps no backups. The director downloads one from the Staff page (Data backup): one file with every record, locked with a password. Keep the file and the password in separate safe places. To restore into a new, empty project: run `SQL/0-rebuild-from-empty.sql` (and newer migrations), then `python -I SQL/backup/make-restore.py <backup file>`, which asks for the password and each staff member's email and writes a restore file to run in the SQL Editor (delete it afterwards). The restore step has been tested on made-up data but not yet in a real Supabase project: try it once on a spare project.
+
+**Database structure (after every new migration).**
 
 Run the five read-only queries in `SQL/backup/` in the SQL Editor, download each result as CSV, then run
 `python -I SQL/backup/make-rebuild.py tables.csv keys.csv code.csv security.csv data.csv` to refresh `SQL/0-rebuild-from-empty.sql`.
