@@ -4,7 +4,9 @@ const CFG=window.MATAN_CONFIG;
 // The school's details for printed report cards. config.js can override any of them with SCHOOL: {...}.
 const SCH=Object.assign({name:"Matan Premier Kindergarten",motto:"Where Mastery Begins",address:"Kiamumbi, Quito Street · QS 54, off Kamiti Road, Nairobi",
   phone:"0712 000 805 · 0721 605 578",email:"matanpremierschools@gmail.com",web:"matanpremierschools.co.ke",logo:"logo.jpg"},CFG.SCHOOL||{});
-const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
+// Demo mode (address ends in ?demo): demo.js supplies made-up children and a stand-in database, so nothing real is read or saved.
+const DEMO=window.MATAN_DEMO||null;
+const sb=DEMO?DEMO.client:supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 
 const AREAS=[
  {k:0,n:"Language",full:"Language Activities",c:"--c1"},
@@ -225,7 +227,8 @@ function loginView(){
   ${S.err?`<div class="note watch">${esc(S.err)}</div>`:""}
   <p><label class="muted">Email<br><input type="email" id="em" autocomplete="username" style="width:100%"></label></p>
   <p><label class="muted">Password<br><input type="password" id="pw" autocomplete="current-password" style="width:100%"></label></p>
-  <button class="primary" id="signin" style="margin-top:0">Sign in</button></div>`;
+  <button class="primary" id="signin" style="margin-top:0">Sign in</button>
+  <p class="muted" style="margin:14px 0 0">Showing the app to someone? <a href="?demo">Open the demo</a>. It uses made-up children only.</p></div>`;
 }
 
 /* ---------- display helpers ---------- */
@@ -1589,7 +1592,7 @@ const termIdOf=label=>{const k=Object.keys(TERMID).find(k=>TERMID[k]===label);re
 /* ----- curriculum tick-off ----- */
 async function loadCurr(){
   const cols="id,cls,area,code,strand,name,lessons,term,sort";
-  let it;try{it=await fetchAll("curriculum_items",cols+",pdf_page","sort");PDF_OK=true}catch(e){it=await fetchAll("curriculum_items",cols,"sort");PDF_OK=false}
+  let it;try{it=await fetchAll("curriculum_items",cols+",pdf_page","sort");PDF_OK=!DEMO}catch(e){it=await fetchAll("curriculum_items",cols,"sort");PDF_OK=false}
   const cv=await fetchAll("curriculum_coverage","id,item_id,term_id,taught_on,taught_by","created_at");
   CI=it;COVR={};cv.forEach(c=>{COVR[c.item_id]=c});CIDONE=true;
 }
@@ -1783,7 +1786,7 @@ function repView(){
   const card=`<div class="rcard" id="rcard"><div class="rc-h">${SCH.logo?`<img class="rc-logo" src="${esc(SCH.logo)}" alt="${esc(SCH.name)} logo">`:""}
     <div class="rc-school"><h2>${esc(SCH.name)}</h2>${SCH.motto?`<p class="rc-motto">${esc(SCH.motto)}</p>`:""}
     <p class="rc-contact">${[SCH.address,SCH.phone,[SCH.email,SCH.web].filter(Boolean).join(" · ")].filter(Boolean).map(esc).join("<br>")}</p></div></div>
-   <p class="rc-title">Termly Report Card · ${esc(label)}</p>
+   <p class="rc-title">Termly Report Card · ${esc(label)}</p>${DEMO?`<p class="rc-demo">Sample report card · made-up child · not a real record</p>`:""}
    <dl class="facts"><div><dt>Learner</dt><dd>${esc(l.name)}</dd></div><div><dt>Class</dt><dd>${l.cls}</dd></div><div><dt>Class teacher</dt><dd>${esc(TEACH[l.cls]||"")}</dd></div><div><dt>Age</dt><dd>${l.age!==null?l.age+" years":"—"}</dd></div><div><dt>Attendance</dt><dd>${l.att!==null?l.att+"%":"Not recorded"}</dd></div></dl>
    <table><thead><tr><th>Learning area</th><th>Score (0 to 5)</th><th>KICD level</th>${pv?"<th>Last term</th>":""}</tr></thead><tbody>
    ${AR(l.cls).map(a=>{const x=kicd(sc[a.k]);return `<tr><td>${esc(a.full)}</td><td>${cell(sc[a.k])}</td><td>${x.c} <span class="muted">${x.t}</span></td>${pv?`<td>${cell(pv[a.k])}</td>`:""}</tr>`}).join("")}
@@ -1931,11 +1934,28 @@ function bindHome(){
   document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>{S.sel=b.dataset.open;S.view="profile";S.err="";render()});
 }
 
+/* ---------- demo bar ---------- */
+// Only in demo mode: says the children are made up, and lets the presenter see the app as each role.
+function demoBar(){
+  const bar=$("demobar");if(!bar)return;
+  if(!DEMO||!ME){bar.hidden=true;return}
+  const who=[["head","Director"],["pp2","Senior teacher"],["pp1","PP1 teacher"],["pg","Playgroup teacher"]];
+  bar.hidden=false;
+  bar.innerHTML=`<span><b>Demo</b> · made-up children only. Nothing is saved: refresh to start again.</span>
+   <span class="demo-who" role="group" aria-label="View the demo as">View as: ${who.map(([k,n])=>`<button class="ghost" data-demo="${k}" aria-pressed="${DEMO.user===DEMO.staff[k].id}">${n}</button>`).join("")}</span>
+   <a href="${location.pathname}">Leave the demo</a>`;
+  bar.querySelectorAll("[data-demo]").forEach(b=>b.onclick=async()=>{
+    if(S.batch){S.batch.stop=true;S.batch=null}const ap=$("autoplan");if(ap)ap.remove();
+    DEMO.user=DEMO.staff[b.dataset.demo].id;S.err="";
+    try{await enter({id:DEMO.user})}catch(e){fail(e)}});
+}
+
 /* ---------- page ---------- */
 function render(){
+  demoBar();
   const m=$("main");
   $("me").innerHTML=ME&&S.view!=="login"?`<span class="muted">Signed in as ${esc(ME.name)} · ${ROLEN[ME.role]||"Teacher"}</span> <button class="ghost" id="signout">Sign out</button>`:"";
-  const so=$("signout");if(so)so.onclick=async()=>{if(S.batch){S.batch.stop=true;S.batch=null}const ap=$("autoplan");if(ap)ap.remove();await sb.auth.signOut();ME=null;L=[];S.view="login";S.err="";S.sess=null;render()};
+  const so=$("signout");if(so)so.onclick=async()=>{if(DEMO){location.href=location.pathname;return}if(S.batch){S.batch.stop=true;S.batch=null}const ap=$("autoplan");if(ap)ap.remove();await sb.auth.signOut();ME=null;L=[];S.view="login";S.err="";S.sess=null;render()};
   if(S.view==="loading"){$("nav").innerHTML="";m.innerHTML=`<p class="muted">Loading…</p>`;return}
   if(S.view==="login"||!ME){
     $("nav").innerHTML="";m.innerHTML=loginView();

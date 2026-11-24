@@ -10,6 +10,7 @@
 <body>
 <a class="skip" href="#main">Skip to main content</a>
 <div class="wrap">
+<div id="demobar" class="demobar noprint" role="note" hidden></div>
 <header>
   <div><h1>Matan Premier Kindergarten</h1><p>Learner progress dashboard</p></div>
   <div class="prefs" role="group" aria-label="Display settings"><button class="ghost" id="pf-down" aria-label="Smaller text">A&minus;</button><button class="ghost" id="pf-up" aria-label="Larger text">A+</button><button class="ghost" id="pf-hc" aria-pressed="false">High contrast</button></div>
@@ -20,6 +21,10 @@
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
+<script>
+  // Demo mode: add ?demo to the address. These two files are only loaded then, and they replace the real database.
+  if (/[?&]demo(=|&|$)/.test(location.search)) document.write('<script src="demo-data.js"><\/script><script src="demo.js"><\/script>');
+</script>
 <script src="app.js"></script>
 </body>
 </html>

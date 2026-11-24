@@ -31,6 +31,10 @@ A school system for Playgroup, PP1 and PP2. It runs on **Vercel** (the website a
 - **Senior teacher:** all classes, can approve questions, no Teaching insights.
 - **Class teachers (Playgroup, PP1, PP2):** their own class only.
 
+## Demo mode
+
+For presentations, add `?demo` to the address (or use "Open the demo" on the sign-in page). The app then runs with 24 made-up children and 4 made-up staff, entirely inside the browser tab: nothing is read from or saved to the real database, the AI answers are canned (nothing is sent to Gemini), WhatsApp messages are shown on screen instead of sent, and every change disappears on refresh. The yellow bar at the top has "View as" buttons for the director, senior teacher and class teachers, and printed report cards say "Sample report card · made-up child". The question bank, curriculum, classes and terms in the demo are the real ones, copied into `demo-data.js` by `python -I SQL/backup/make-demo-data.py` (run it again after refreshing the rebuild file). The made-up children are in `demo.js`.
+
 ## Monthly plans
 
 Each month the AI drafts every consenting child's goals and individual test again. This starts by itself a few seconds after the director, senior teacher or a class teacher signs in, for the classes that person can see. A box in the corner shows progress and has a Stop button, and people can keep working while it runs. Anything left over (stopped, failed, or a child added later) is tried again at the next sign-in. The "Make plans" button on the Learners page does the same by hand. Nothing is used until a teacher approves it.

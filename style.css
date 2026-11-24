@@ -144,3 +144,11 @@ button.ghost.pdfb{padding:2px 10px;font-size:.8rem;margin:0 0 0 4px;min-height:0
 .autoplan{position:fixed;right:16px;bottom:16px;z-index:50;max-width:300px;background:var(--surface);color:var(--ink);border:2px solid var(--line);border-radius:12px;padding:10px 14px;font-size:.9rem;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .autoplan .ghost{margin-top:8px;padding:2px 12px;font-size:.85rem}
 @media (max-width:560px){.autoplan{left:16px;right:16px;max-width:none}}
+/* demo mode */
+.demobar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;background:#B68A4E;color:#1A203A;border-radius:12px;padding:8px 14px;margin:8px 0 4px;font-size:.92rem}
+.demobar[hidden]{display:none}
+.demobar a{color:#1A203A;font-weight:700}
+.demo-who{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.demo-who .ghost{padding:3px 10px;font-size:.85rem;background:#fff;color:#1A203A;border-color:#1A203A}
+.demo-who .ghost[aria-pressed="true"]{background:#1A203A;color:#fff}
+.rcard .rc-demo{margin:6px 0 0;text-align:center;font-weight:700;color:#6A171A;border:2px dashed #6A171A;border-radius:8px;padding:4px}
