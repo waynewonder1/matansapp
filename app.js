@@ -213,6 +213,7 @@ async function enter(user){
   ME=st;S.err="";
   await loadAll();
   S.view=isAdmin()?"home":"list";OV.loaded=false;render();
+  setTimeout(autoMonthly,4000);  // monthly plans start by themselves (see autoMonthly)
 }
 async function doLogin(){
   const {data,error}=await sb.auth.signInWithPassword({email:$("em").value.trim(),password:$("pw").value});
@@ -590,26 +591,62 @@ function monthlyPanel(){
   const mine=L.filter(l=>visCls().includes(l.cls)),withC=mine.filter(l=>l.aic),done=withC.filter(l=>l.mdone),todo=monthTodo(),b=S.batch;
   if(!mine.length)return "";
   return `<div class="panel" id="monthly"><h2>${esc(monthName())} · monthly goals and tests</h2>
-  <p class="muted" style="margin-top:0">Every month the AI makes each child's goals and individual test again, using their latest scores and, for children with a support plan, their needs. A teacher approves before anything is used. Only children whose guardian signed the AI consent are included.</p>
+  <p class="muted" style="margin-top:0">Every month the AI makes each child's goals and individual test again. This starts by itself a few seconds after a teacher or the director signs in, and you can also start it here. It uses their latest scores and, for children with a support plan, their needs. A teacher approves before anything is used. Only children whose guardian signed the AI consent are included.</p>
   <p style="margin:0 0 8px"><b>${done.length} of ${withC.length}</b> children with AI consent have this month's plan${mine.length>withC.length?` <span class="muted">· ${mine.length-withC.length} without consent</span>`:""}.</p>
   ${b&&b.running?`<div class="bar" aria-hidden="true"><i style="width:${Math.round(100*b.n/Math.max(1,b.t))}%"></i></div><p class="muted" role="status">Making plans… ${b.n} of ${b.t}</p>`
-   :`${todo.length?`<button class="primary" id="m_run" style="margin-top:0">Make plans for ${todo.length} child${todo.length===1?"":"ren"}</button> <span class="muted">Takes about ${Math.max(1,Math.ceil(todo.length*6/60))} minute${todo.length>6?"s":""}. Keep this page open.</span>`:`<span class="tag ok">All plans for ${esc(monthName())} are made</span>`}`}
+   :`${todo.length?`<button class="primary" id="m_run" style="margin-top:0">Make plans for ${todo.length} child${todo.length===1?"":"ren"}</button> <span class="muted">Takes about ${Math.max(1,Math.ceil(todo.length*6/60))} minute${todo.length>6?"s":""}. You can keep working while it runs.</span>`:`<span class="tag ok">All plans for ${esc(monthName())} are made</span>`}`}
   ${b&&b.msg?`<p class="muted" role="status" style="margin:8px 0 0">${esc(b.msg)}</p>`:""}</div>`;
 }
-async function runMonthly(){
-  if(S.saving)return;S.saving=true;
-  const todo=monthTodo();S.batch={running:true,n:0,t:todo.length,fail:0,msg:""};render();
+// Automatic: a few seconds after a staff member signs in, any of this month's missing plans for their classes are made
+// in the background (the director's and senior teacher's run covers every class). A small box in the corner shows progress.
+// The button on the Learners page does the same thing by hand.
+async function hasMonthPlan(l){
+  const r=await run(sb.from("learner_questions").select("id").eq("learner_id",l.id).eq("month",monthFirst()).in("status",["proposed","approved"]).limit(1));
+  return r.length>0;
+}
+function autoMonthly(){
+  if(!ME||S.autoOff||!SUP_OK||!AI_OK||!MONTH_OK||(S.batch&&S.batch.running))return;
+  if(monthTodo().length)runMonthly(true);
+}
+// Show progress without redrawing the page under someone who is working.
+function monthShow(){
+  const b=S.batch;
+  if(!b||!b.auto){render();return}
+  const mp=$("monthly");if(mp){mp.outerHTML=monthlyPanel();const mr=$("m_run");if(mr)mr.onclick=()=>runMonthly(false)}
+  let p=$("autoplan");
+  if(!p){p=document.createElement("div");p.id="autoplan";p.className="autoplan noprint";p.setAttribute("role","status");document.body.appendChild(p)}
+  p.innerHTML=b.running?`<b>${esc(monthName())} plans</b><br>Making plans… ${b.n} of ${b.t}<div class="bar" aria-hidden="true"><i style="width:${Math.round(100*b.n/Math.max(1,b.t))}%"></i></div><button class="ghost" id="ap_stop">Stop</button>`
+    :`<b>${esc(monthName())} plans</b><br>${esc(b.msg)}<br><button class="ghost" id="ap_ok">OK</button>`;
+  const st=$("ap_stop");if(st)st.onclick=()=>{b.stop=true;S.autoOff=true;st.disabled=true;st.textContent="Stopping…"};
+  const ok=$("ap_ok");if(ok)ok.onclick=()=>{p.remove();S.batch=null;if(S.view==="list"||S.view==="home")rr()};
+}
+async function runMonthly(auto){
+  if(S.batch&&S.batch.running)return;
+  const todo=monthTodo();if(!todo.length)return;
+  const b=S.batch={running:true,auto:!!auto,n:0,t:todo.length,fail:0,made:0,msg:"",stop:false};monthShow();
   try{
     for(const l of todo){
-      try{await loadSupport(l);await requestAI(l);l.mdone=true}catch(e){S.batch.fail++;S.batch.last=e&&e.message}
-      S.batch.n++;render();
-      if(S.batch.fail>=3&&S.batch.fail===S.batch.n){break}   // the first three all failed: something is wrong, stop
+      if(b.stop||!ME)break;
+      try{
+        if(await hasMonthPlan(l))l.mdone=true;   // someone else already made it, for example on another computer
+        else{await loadSupport(l);await requestAI(l);l.mdone=true;b.made++}
+      }catch(e){b.fail++;b.last=e&&e.message}
+      b.n++;monthShow();
+      if(b.fail>=3&&b.fail===b.n)break;   // the first three all failed: something is wrong, stop
       await sleep(700);
     }
-    await loadSupportAll();
-  }finally{
-    const b=S.batch;S.batch={running:false,n:b.n,t:b.t,fail:b.fail,msg:b.fail?`${b.n-b.fail} plan${b.n-b.fail===1?"":"s"} made, ${b.fail} failed. ${b.last||""} Press the button again to retry the rest.`:`${b.n} plan${b.n===1?"":"s"} made. Open each child to review and approve.`};
-    S.saving=false;render()}
+    if(ME)await loadSupportAll();
+  }catch(e){b.fail++;b.last=e&&e.message}
+  finally{
+    b.running=false;
+    const left=monthTodo().length;
+    b.msg=(b.made?`${b.made} plan${b.made===1?"":"s"} made. Open each child on the Learners page to review and approve. `:"")
+      +(b.fail?`${b.fail} failed. ${b.last||""} `:"")
+      +(left?`${left} still to do: ${b.stop?"stopped. They start again next time you sign in, or":"they are tried again next time you sign in, or"} use the button on the Learners page.`:b.made?"":"All plans for this month are made.");
+    if(!ME){S.batch=null;const p=$("autoplan");if(p)p.remove();return}
+    if(b.auto){monthShow();const typing=document.activeElement&&/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);if((S.view==="list"||S.view==="home")&&!typing)rr()}
+    else render();
+  }
 }
 // Small AI batches, so Gemini answers inside Vercel's time limit.
 const AIBATCH=5;
@@ -1855,6 +1892,7 @@ function homeView(){
   if(qPend)todo.push([`${qPend} question${qPend===1?"":"s"} waiting for approval in the Question bank.`,go("bank","Question bank")]);
   if(AI_OK&&aiPend)todo.push([`${aiPend} AI suggestion${aiPend===1?"":"s"} (goals or questions) waiting for a teacher to approve.`,go(isHead()?"teach":"list","See which")]);
   if(TIER_OK){const nt=L.filter(l=>!tierSet(l)).length;if(nt)todo.push([`${nt} learner${nt===1?" has":"s have"} no confirmed support tier.`,go("list","Learners")])}
+  if(SUP_OK&&AI_OK&&MONTH_OK){const mt=monthTodo().length;if(mt)todo.push([`${mt} child${mt===1?" has":"ren have"} no plan for ${esc(monthName())} yet. They are made automatically after sign-in.`,go("list","Learners")])}
   const notDone=L.filter(l=>!done(l)).length;if(CUR&&notDone)todo.push([`${notDone} of ${L.length} learners are not fully assessed for ${esc(CUR)} yet.`,go("queue","Assessment")]);
 
   let h=`<div class="panel"><h2 style="margin-bottom:2px">Overview</h2><p class="muted" style="margin:0">${esc(when)} · ${esc(CUR||"No term set")}</p></div>
@@ -1897,7 +1935,7 @@ function bindHome(){
 function render(){
   const m=$("main");
   $("me").innerHTML=ME&&S.view!=="login"?`<span class="muted">Signed in as ${esc(ME.name)} · ${ROLEN[ME.role]||"Teacher"}</span> <button class="ghost" id="signout">Sign out</button>`:"";
-  const so=$("signout");if(so)so.onclick=async()=>{await sb.auth.signOut();ME=null;L=[];S.view="login";S.err="";S.sess=null;render()};
+  const so=$("signout");if(so)so.onclick=async()=>{if(S.batch){S.batch.stop=true;S.batch=null}const ap=$("autoplan");if(ap)ap.remove();await sb.auth.signOut();ME=null;L=[];S.view="login";S.err="";S.sess=null;render()};
   if(S.view==="loading"){$("nav").innerHTML="";m.innerHTML=`<p class="muted">Loading…</p>`;return}
   if(S.view==="login"||!ME){
     $("nav").innerHTML="";m.innerHTML=loginView();
@@ -1911,7 +1949,7 @@ function render(){
   const err=S.err?`<div class="note watch" role="alert">${esc(S.err)} <button class="ghost" id="dismiss" style="padding:2px 10px;font-size:.8rem">Dismiss</button></div>`:"";
   m.innerHTML=err+(S.view==="home"?homeView():S.view==="list"?listView():S.view==="profile"?profileView():S.view==="queue"?queueView():S.view==="assess"?assessView():S.view==="bank"?bankView():S.view==="att"?attView():S.view==="add"?addView():S.view==="staff"?staffView():S.view==="cov"?covView():S.view==="rep"?repView():S.view==="check"?checkView():teachView());
   const dm=$("dismiss");if(dm)dm.onclick=()=>{S.err="";render()};
-  if(S.view==="list"){fillGrid();$("q").oninput=e=>{S.q=e.target.value;fillGrid()};m.querySelectorAll(".chip[data-c]").forEach(b=>b.onclick=()=>{S.lcls=b.dataset.c;render()});const lp=$("lsp");if(lp)lp.onclick=()=>{S.lsp=!S.lsp;render()};m.querySelectorAll(".chip[data-tier]").forEach(b=>b.onclick=()=>{S.ltier=S.ltier===b.dataset.tier?"":b.dataset.tier;render()});const mr=$("m_run");if(mr)mr.onclick=runMonthly}
+  if(S.view==="list"){fillGrid();$("q").oninput=e=>{S.q=e.target.value;fillGrid()};m.querySelectorAll(".chip[data-c]").forEach(b=>b.onclick=()=>{S.lcls=b.dataset.c;render()});const lp=$("lsp");if(lp)lp.onclick=()=>{S.lsp=!S.lsp;render()};m.querySelectorAll(".chip[data-tier]").forEach(b=>b.onclick=()=>{S.ltier=S.ltier===b.dataset.tier?"":b.dataset.tier;render()});const mr=$("m_run");if(mr)mr.onclick=()=>runMonthly(false)}
   if(S.view==="queue"){m.querySelectorAll(".chip[data-c]").forEach(b=>b.onclick=()=>{S.cls=b.dataset.c;render()});m.querySelectorAll(".chip[data-qm]").forEach(b=>b.onclick=()=>{S.qmode=b.dataset.qm;render()});m.querySelectorAll(".card").forEach(b=>b.onclick=()=>S.qmode==="check"&&CHK_OK?beginCheck(b.dataset.i):begin(b.dataset.i))}
   if(S.view==="check"){bindCheck();bindTabs()}
   if(S.view==="cov"){bindCov();bindTabs();if(COV_OK&&!CIDONE&&!S.covLoading){S.covLoading=true;loadCurr().then(()=>{S.covLoading=false;render()}).catch(e=>{S.covLoading=false;fail(e)})}}

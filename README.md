@@ -31,6 +31,10 @@ A school system for Playgroup, PP1 and PP2. It runs on **Vercel** (the website a
 - **Senior teacher:** all classes, can approve questions, no Teaching insights.
 - **Class teachers (Playgroup, PP1, PP2):** their own class only.
 
+## Monthly plans
+
+Each month the AI drafts every consenting child's goals and individual test again. This starts by itself a few seconds after the director, senior teacher or a class teacher signs in, for the classes that person can see. A box in the corner shows progress and has a Stop button, and people can keep working while it runs. Anything left over (stopped, failed, or a child added later) is tried again at the next sign-in. The "Make plans" button on the Learners page does the same by hand. Nothing is used until a teacher approves it.
+
 ## Privacy
 
 Nothing that identifies a child (name, phone number, diagnosis, notes, doctor's report) is sent to the AI. AI features only run when the guardian's signed consent is recorded. The AI only drafts: a teacher reads and approves everything. Children's health information is sensitive under the Kenya Data Protection Act 2019, so have the school's consent forms and doctor's-report handling checked by someone qualified.
