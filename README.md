@@ -39,6 +39,17 @@ For presentations, add `?demo` to the address (or use "Open the demo" on the sig
 
 Each month the AI drafts every consenting child's goals and individual test again. This starts by itself a few seconds after the director, senior teacher or a class teacher signs in, for the classes that person can see. A box in the corner shows progress and has a Stop button, and people can keep working while it runs. Anything left over (stopped, failed, or a child added later) is tried again at the next sign-in. The "Make plans" button on the Learners page does the same by hand. Nothing is used until a teacher approves it.
 
+## Messages to parents
+
+The Parents page sends every parent in a class either a personal **term update** or the same **notice**, in **English or Kiswahili**:
+- A term update covers attendance, the level in each learning area, what the child does best and one thing to try at home.
+- Each parent has a WhatsApp and an SMS button. Notices also have "SMS to all", which opens one SMS with every number filled in.
+- Everything opens on the staff member's own phone, and they press send there. The app sends nothing by itself, and the school pays no bulk-SMS fees.
+- Each tap is saved in `parent_messages`, so the page shows when each family was last messaged.
+- Messages never mention support tiers, needs or health.
+- Teachers see only their own class.
+- The Kiswahili wording is built in. Have a fluent staff member read it once.
+
 ## Privacy
 
 No child's or guardian's name, phone number, email or ID number is sent to the AI: the server removes them from any typed text first (`api/_privacy.js`). The support-tier suggestion does send the doctor's report with those details removed, because that is what it reads. AI features only run when the guardian's AI consent is recorded, and the server checks it. The AI only drafts: a teacher reads and approves everything. Children's health information is sensitive under the Kenya Data Protection Act 2019. See `docs/privacy-review.md` for the full review and the school's to-do list (ODPC registration, Gemini paid tier, consent forms, retention).

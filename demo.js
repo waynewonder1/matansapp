@@ -321,8 +321,11 @@
   const realOpen = window.open.bind(window);
   window.open = (url, ...rest) => {
     if (/^(https:\/\/wa\.me|tel:|sms:)/.test(String(url || ""))) {
-      const text = (/[?&]text=([^&]*)/.exec(String(url)) || [])[1];
-      alert("Demo: in the real app this opens WhatsApp. The message would be:\n\n" + (text ? decodeURIComponent(text) : "(no message)"));
+      const u = String(url), sms = /^sms:/.test(u);
+      const text = (/[?&](?:text|body)=([^&]*)/.exec(u) || [])[1];
+      const to = sms ? decodeURIComponent(u.slice(4).split("?")[0]).split(",").filter(Boolean) : [];
+      alert((sms ? `Demo: in the real app this opens SMS on your phone, to ${to.length} number${to.length === 1 ? "" : "s"}.` : "Demo: in the real app this opens WhatsApp.")
+        + " The message would be:\n\n" + (text ? decodeURIComponent(text) : "(no message)"));
       return null;
     }
     return realOpen(url, ...rest);
