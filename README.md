@@ -41,14 +41,13 @@ Each month the AI drafts every consenting child's goals and individual test agai
 
 ## Messages to parents
 
-The Parents page sends every parent in a class either a personal **term update** or the same **notice**, in **English or Kiswahili**:
+The Parents page sends every parent in a class either a personal **term update** or the same **notice**, in English:
 - A term update covers attendance, the level in each learning area, what the child does best and one thing to try at home.
 - Each parent has a WhatsApp and an SMS button. Notices also have "SMS to all", which opens one SMS with every number filled in.
 - Everything opens on the staff member's own phone, and they press send there. The app sends nothing by itself, and the school pays no bulk-SMS fees.
 - Each tap is saved in `parent_messages`, so the page shows when each family was last messaged.
 - Messages never mention support tiers, needs or health.
 - Teachers see only their own class.
-- The Kiswahili wording is built in. Have a fluent staff member read it once.
 
 ## Privacy
 

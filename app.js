@@ -1922,63 +1922,48 @@ function bindRep(){
 }
 
 /* ---------- messages to parents ---------- */
-// A whole class at once, in English or Kiswahili, by WhatsApp or SMS. Everything opens on the staff member's own phone
+// A whole class at once, by WhatsApp or SMS. Everything opens on the staff member's own phone
 // and they press send there, so the school pays nothing and the app sends nothing by itself. Each tap is noted in
 // parent_messages. Messages never mention support tiers, needs or health: only attendance and learning levels,
 // the same as the report card.
-const PM={cls:"",kind:"update",lang:"en",text:"",msgs:{},loadedFor:"",sent:{}};
-const AREA_SW=["Lugha","Hisabati","Mazingira","Ubunifu","Elimu ya Dini ya Kikristo"];
-const AREA_SW_PG=["Lugha na kusoma mapema","Hisabati ya awali","Kuchunguza mazingira","Ubunifu na michezo ya mwili","Maadili na ujuzi wa kijamii"];
-const LEVEL_TXT={en:{EE:"doing very well",ME:"doing well",AE:"getting there",BE:"needs more practice"},
-  sw:{EE:"anafanya vizuri sana",ME:"anafanya vizuri",AE:"anaendelea vizuri",BE:"anahitaji mazoezi zaidi"}};
-const HOME_TIP={
-  en:["read a picture book together and ask your child to tell you about the pictures.","count everyday things together, like cups, spoons or steps.",
-    "talk about plants, animals and the weather when you walk outside.","let your child draw, colour, sing or dance, then tell you about it.",
-    "share a short Bible story or prayer and talk about being kind."],
-  sw:["someni kitabu cha picha pamoja na mwombe mtoto akusimulie kuhusu picha.","hesabuni vitu vya nyumbani pamoja, kama vikombe, vijiko au ngazi.",
-    "ongeeni kuhusu mimea, wanyama na hali ya hewa mnapotembea nje.","mpe mtoto nafasi ya kuchora, kupaka rangi, kuimba au kucheza, kisha akueleze.",
-    "someni hadithi fupi ya Biblia au ombeni pamoja, na mzungumze kuhusu wema."]};
-const HOME_TIP_PG={en:"let your child help with small jobs at home, and praise them for sharing and taking turns.",
-  sw:"mpe mtoto kazi ndogo za nyumbani, na umsifu anaposhiriki na kungoja zamu yake."};
+const PM={cls:"",kind:"update",text:"",msgs:{},loadedFor:"",sent:{}};
+const LEVEL_TXT={EE:"doing very well",ME:"doing well",AE:"getting there",BE:"needs more practice"};
+const HOME_TIP=["read a picture book together and ask your child to tell you about the pictures.","count everyday things together, like cups, spoons or steps.",
+  "talk about plants, animals and the weather when you walk outside.","let your child draw, colour, sing or dance, then tell you about it.",
+  "share a short Bible story or prayer and talk about being kind."];
+const HOME_TIP_PG="let your child help with small jobs at home, and praise them for sharing and taking turns.";
 const NOTICE_T=[
-  ["School closing",{en:"School closes on Friday at 12 noon. Please pick up your child on time.",sw:"Shule itafungwa Ijumaa saa sita mchana. Tafadhali mchukue mtoto wako kwa wakati."}],
-  ["Parents' meeting",{en:"There is a parents' meeting at the school on Saturday at 10 am. Please come.",sw:"Kutakuwa na mkutano wa wazazi shuleni Jumamosi saa nne asubuhi. Tafadhali hudhuria."}],
-  ["Things to bring",{en:"Please send your child with a raincoat and a water bottle tomorrow.",sw:"Tafadhali mtume mtoto wako na koti la mvua na chupa ya maji kesho."}]];
+  ["School closing","School closes on Friday at 12 noon. Please pick up your child on time."],
+  ["Parents' meeting","There is a parents' meeting at the school on Saturday at 10 am. Please come."],
+  ["Things to bring","Please send your child with a raincoat and a water bottle tomorrow."]];
 // "Jane Wanjiru" is greeted as Jane; "Mrs. Kamau" and "Baba Bahati" keep both words.
 const greetName=g=>{const w=String(g||"").trim().split(/\s+/).filter(Boolean);return !w.length?"":/^(mr|mrs|ms|miss|dr|mama|baba|mzee|pastor|rev)\.?$/i.test(w[0])&&w[1]?w[0]+" "+w[1]:w[0]};
-const areaName=(c,k,lang)=>lang==="sw"?(c==="PG"?AREA_SW_PG:AREA_SW)[k]:AR(c)[k].full;
-const homeTip=(c,k,lang)=>c==="PG"&&k===4?HOME_TIP_PG[lang]:HOME_TIP[lang][k];
+const areaName=(c,k)=>AR(c)[k].full;
+const homeTip=(c,k)=>c==="PG"&&k===4?HOME_TIP_PG:HOME_TIP[k];
 // The scores a term update is built from: the latest end-of-term exam, or this term's scores so far.
 function pmScores(l){
   if(has(l))return {term:l.labels[l.labels.length-1],sc:last(l),sofar:false};
   return l.cur.some(v=>v!==null)?{term:CUR,sc:l.cur,sofar:true}:null;
 }
-function pmUpdate(l,lang,short){
-  const first=greetName(l.guardian),fn=l.name.split(" ")[0],s=pmScores(l),sw=lang==="sw";
+function pmUpdate(l,short){
+  const first=greetName(l.guardian),fn=l.name.split(" ")[0],s=pmScores(l);
   const ks=s?s.sc.map((v,k)=>[v,k]).filter(x=>x[0]!==null):[];
   const hi=ks.length?ks.reduce((a,b)=>b[0]>a[0]?b:a):null,low=ks.length?ks.reduce((a,b)=>b[0]<a[0]?b:a):null;
-  const best=hi&&low&&hi[0]>low[0]?hi:null,tip=homeTip(l.cls,low?low[1]:0,lang);  // "doing best in" only when one area is really ahead
+  const best=hi&&low&&hi[0]>low[0]?hi:null,tip=homeTip(l.cls,low?low[1]:0);  // "doing best in" only when one area is really ahead
   const att=l.att!==null?l.att+"%":"";
-  if(short){
-    return sw?`${SCH.name}: Taarifa ya ${fn}${s?", "+s.term:""}.${att?" Mahudhurio "+att+".":""}${best?" Anafanya vizuri zaidi katika "+areaName(l.cls,best[1],lang)+".":""} Nyumbani: ${tip} - ${ME.name}`
-      :`${SCH.name}: ${fn}'s update${s?" for "+s.term:""}.${att?" Attendance "+att+".":""}${best?" Doing best in "+areaName(l.cls,best[1],lang)+".":""} At home: ${tip} - ${ME.name}`;
-  }
-  const lines=ks.map(([v,k])=>`• ${areaName(l.cls,k,lang)}: ${LEVEL_TXT[lang][kicd(v).c]}`).join("\n");
-  if(sw)return `Habari${first?" "+first:""},\n\nHii ni taarifa fupi kuhusu ${fn}${s?" ("+s.term+(s.sofar?", hadi sasa":"")+")":""} hapa ${SCH.name}.\n\n`
-    +(att?`*Mahudhurio:* ${att}\n\n`:"")+(lines?`*Masomo*\n${lines}\n\n`:"")
-    +(best?`${fn} anafanya vizuri zaidi katika ${areaName(l.cls,best[1],lang)}.\n\n`:"")
-    +`*Nyumbani mnaweza kujaribu:* ${tip}\n\nKaribu uniulize swali lolote.\n\nAsante,\n${ME.name}\n${SCH.name}`;
+  if(short)return `${SCH.name}: ${fn}'s update${s?" for "+s.term:""}.${att?" Attendance "+att+".":""}${best?" Doing best in "+areaName(l.cls,best[1])+".":""} At home: ${tip} - ${ME.name}`;
+  const lines=ks.map(([v,k])=>`• ${areaName(l.cls,k)}: ${LEVEL_TXT[kicd(v).c]}`).join("\n");
   return `Hello${first?" "+first:""},\n\nHere is a short update on ${fn}${s?" ("+s.term+(s.sofar?", so far":"")+")":""} at ${SCH.name}.\n\n`
     +(att?`*Attendance:* ${att}\n\n`:"")+(lines?`*Learning*\n${lines}\n\n`:"")
-    +(best?`${fn} is doing best in ${areaName(l.cls,best[1],lang)}.\n\n`:"")
+    +(best?`${fn} is doing best in ${areaName(l.cls,best[1])}.\n\n`:"")
     +`*Something to try at home:* ${tip.charAt(0).toUpperCase()+tip.slice(1)}\n\nPlease talk to me if you have any questions.\n\nWarm regards,\n${ME.name}\n${SCH.name}`;
 }
-function pmNotice(l,lang,short){
+function pmNotice(l,short){
   const t=PM.text.trim(),first=l?greetName(l.guardian):"";
   if(short)return `${SCH.name}: ${t} - ${ME.name}`;
-  return `${lang==="sw"?"Habari":"Hello"}${first?" "+first:""},\n\n${t}\n\n${lang==="sw"?"Asante":"Thank you"},\n${ME.name}\n${SCH.name}`;
+  return `Hello${first?" "+first:""},\n\n${t}\n\nThank you,\n${ME.name}\n${SCH.name}`;
 }
-const pmText=(l,short)=>PM.kind==="notice"?pmNotice(l,PM.lang,short):pmUpdate(l,PM.lang,short);
+const pmText=(l,short)=>PM.kind==="notice"?pmNotice(l,short):pmUpdate(l,short);
 // SMS: 160 letters per message. Anything outside the basic SMS letters (for example an emoji) cuts it to 70.
 const smsParts=t=>{const gsm=/^[\x20-\x7E\n\r£¥èéùìòÇØøÅå_ÆæßÉ¡ÄÖÑÜ§¿äöñüà€]*$/.test(t),one=gsm?160:70,many=gsm?153:67;return t.length<=one?1:Math.ceil(t.length/many)};
 const smsNum=p=>{const d=waNumber(p);return d?"+"+d:""};
@@ -1994,27 +1979,26 @@ async function loadPm(c){
   PM.loadedFor=c;
 }
 async function pmLog(rows){
-  await run(sb.from("parent_messages").insert(rows.map(r=>({learner_id:r.l.id,term_id:CURID||null,staff_id:ME.id,channel:r.ch,language:PM.lang,body:r.body}))));
+  await run(sb.from("parent_messages").insert(rows.map(r=>({learner_id:r.l.id,term_id:CURID||null,staff_id:ME.id,channel:r.ch,language:"en",body:r.body}))));
   const at=new Date().toISOString();
-  rows.forEach(r=>{PM.sent[PM.kind+"|"+r.l.id+"|"+r.ch]=true;PM.msgs[r.l.id]={channel:r.ch,language:PM.lang,sent_at:at}});
+  rows.forEach(r=>{PM.sent[PM.kind+"|"+r.l.id+"|"+r.ch]=true;PM.msgs[r.l.id]={channel:r.ch,language:"en",sent_at:at}});
 }
 function pmView(){
   const vis=visCls();if(!vis.length)return `<p class="muted">You are not set as the teacher of a class yet.</p>`;
-  const c=PM.cls=vis.includes(PM.cls)?PM.cls:vis[0],ls=L.filter(l=>l.cls===c),notice=PM.kind==="notice",sw=PM.lang==="sw";
+  const c=PM.cls=vis.includes(PM.cls)?PM.cls:vis[0],ls=L.filter(l=>l.cls===c),notice=PM.kind==="notice";
   const withNum=ls.filter(l=>waNumber(l.phone)),noText=notice&&!PM.text.trim();
   const chips=(k,v,label)=>`<button class="chip" data-${k}="${v}" aria-pressed="${PM[k]===v}">${label}</button>`;
   let h=`<div class="panel"><h2 style="margin-bottom:4px">Messages to parents</h2>
-   <p class="muted" style="margin-top:0">Send every parent in a class a personal term update or a notice, in English or Kiswahili. Each button opens WhatsApp or SMS on <b>your</b> phone with the message ready: check it and press send there. The school pays nothing extra, and messages never mention support tiers, needs or health.</p>
+   <p class="muted" style="margin-top:0">Send every parent in a class a personal term update or a notice. Each button opens WhatsApp or SMS on <b>your</b> phone with the message ready: check it and press send there. The school pays nothing extra, and messages never mention support tiers, needs or health.</p>
    <div class="tools">${vis.map(x=>`<button class="chip" data-pmc="${x}" aria-pressed="${c===x}">${x} · ${esc(TEACH[x]||"")}</button>`).join("")}</div>
-   <div class="tools"><span class="muted">Message</span>${chips("kind","update","Term update (personal)")}${chips("kind","notice","Notice (same for all)")}</div>
-   <div class="tools"><span class="muted">Language</span>${chips("lang","en","English")}${chips("lang","sw","Kiswahili")}</div>`;
+   <div class="tools"><span class="muted">Message</span>${chips("kind","update","Term update (personal)")}${chips("kind","notice","Notice (same for all)")}</div>`;
   if(notice){
-    h+=`<p style="margin-bottom:4px"><label for="pm_text"><b>Notice</b> ${sw?"(write it in Kiswahili)":""}</label></p>
-     <textarea id="pm_text" rows="3" style="width:100%" maxlength="600" placeholder="${sw?"Kwa mfano: Shule itafungwa Ijumaa saa sita mchana.":"For example: School closes on Friday at 12 noon."}">${esc(PM.text)}</textarea>
+    h+=`<p style="margin-bottom:4px"><label for="pm_text"><b>Notice</b></label></p>
+     <textarea id="pm_text" rows="3" style="width:100%" maxlength="600" placeholder="For example: School closes on Friday at 12 noon.">${esc(PM.text)}</textarea>
      <div class="tools" style="margin-top:6px"><span class="muted">Start from</span>${NOTICE_T.map((t,i)=>`<button class="ghost" data-pmt="${i}">${t[0]}</button>`).join("")}</div>
      <p class="muted" style="margin:6px 0 4px">WhatsApp version (each parent gets their own name):</p>
-     <pre class="pm-prev" id="pm_prev">${esc(pmNotice(withNum[0]||ls[0]||null,PM.lang,false))}</pre>
-     <p class="muted" id="pm_smsn" style="margin:4px 0 10px">SMS version: "${esc(pmNotice(null,PM.lang,true))}" · ${smsParts(pmNotice(null,PM.lang,true))} SMS each</p>
+     <pre class="pm-prev" id="pm_prev">${esc(pmNotice(withNum[0]||ls[0]||null,false))}</pre>
+     <p class="muted" id="pm_smsn" style="margin:4px 0 10px">SMS version: "${esc(pmNotice(null,true))}" · ${smsParts(pmNotice(null,true))} SMS each</p>
      <button class="primary" id="pm_all" ${withNum.length&&!noText?"":"disabled"}>SMS to all ${withNum.length} parent${withNum.length===1?"":"s"}</button>
      <span class="muted" style="margin-left:8px">One message with every number filled in. Some phones only take the first number: then use the SMS buttons below one by one.</span>`;
   }else{
@@ -2027,7 +2011,7 @@ function pmView(){
     const num=waNumber(l.phone),m=PM.msgs[l.id],fn=l.name.split(" ")[0];
     const done=ch=>PM.sent[PM.kind+"|"+l.id+"|"+ch];
     const off=!num||noText;
-    const last=m?`<span class="tag ok">&#10003; Last message ${esc(fmtDate(m.sent_at))} by ${m.channel==="sms"?"SMS":m.channel==="whatsapp"?"WhatsApp":"copy"}${m.language==="sw"?", Kiswahili":""}</span>`:`<span class="tag">No message in the last 4 months</span>`;
+    const last=m?`<span class="tag ok">&#10003; Last message ${esc(fmtDate(m.sent_at))} by ${m.channel==="sms"?"SMS":m.channel==="whatsapp"?"WhatsApp":"copy"}</span>`:`<span class="tag">No message in the last 4 months</span>`;
     const full=pmText(l,false),short=pmText(l,true);
     return `<div class="areaRow pm-row"><span style="display:flex;gap:10px;align-items:center;min-width:220px;flex:1">${av(l,36)}<span><b>${esc(l.name)}</b><br><span class="muted">${esc(l.guardian||"No guardian recorded")}${l.phone?" · "+esc(l.phone):""}</span></span></span>
      <span>${last}</span>
@@ -2043,12 +2027,11 @@ function bindPm(){
   if(PM.loadedFor!==c&&!S.pmLoading){S.pmLoading=true;loadPm(c).then(()=>{S.pmLoading=false;if(S.view==="par")rr()}).catch(e=>{S.pmLoading=false;PM.loadedFor=c;fail(e)})}
   document.querySelectorAll("[data-pmc]").forEach(b=>b.onclick=()=>{PM.cls=b.dataset.pmc;S.err="";render()});
   document.querySelectorAll("[data-kind]").forEach(b=>b.onclick=()=>{PM.kind=b.dataset.kind;rr()});
-  document.querySelectorAll("[data-lang]").forEach(b=>b.onclick=()=>{PM.lang=b.dataset.lang;rr()});
-  document.querySelectorAll("[data-pmt]").forEach(b=>b.onclick=()=>{PM.text=NOTICE_T[+b.dataset.pmt][1][PM.lang];rr()});
+  document.querySelectorAll("[data-pmt]").forEach(b=>b.onclick=()=>{PM.text=NOTICE_T[+b.dataset.pmt][1];rr()});
   const ta=$("pm_text");
   if(ta){
-    const refresh=()=>{const p=$("pm_prev"),n=$("pm_smsn"),ls=L.filter(l=>l.cls===c),one=ls.find(l=>waNumber(l.phone))||ls[0]||null,s=pmNotice(null,PM.lang,true);
-      if(p)p.textContent=pmNotice(one,PM.lang,false);if(n)n.textContent=`SMS version: "${s}" · ${smsParts(s)} SMS each`};
+    const refresh=()=>{const p=$("pm_prev"),n=$("pm_smsn"),ls=L.filter(l=>l.cls===c),one=ls.find(l=>waNumber(l.phone))||ls[0]||null,s=pmNotice(null,true);
+      if(p)p.textContent=pmNotice(one,false);if(n)n.textContent=`SMS version: "${s}" · ${smsParts(s)} SMS each`};
     ta.oninput=()=>{const was=!!PM.text.trim();PM.text=ta.value;refresh();if(was!==!!PM.text.trim()){const pos=ta.selectionStart;rr();const t2=$("pm_text");if(t2){t2.focus();t2.setSelectionRange(pos,pos)}}};
   }
   const send=async(l,ch)=>{
@@ -2060,7 +2043,7 @@ function bindPm(){
   document.querySelectorAll("[data-pmsms]").forEach(b=>b.onclick=()=>{const l=byId(b.dataset.pmsms);if(l)send(l,"sms")});
   const all=$("pm_all");if(all)all.onclick=async()=>{
     const ls=L.filter(l=>l.cls===c&&waNumber(l.phone));if(!ls.length||!PM.text.trim())return;
-    const body=pmNotice(null,PM.lang,true);
+    const body=pmNotice(null,true);
     openOut(`sms:${ls.map(l=>smsNum(l.phone)).join(",")}?&body=${encodeURIComponent(body)}`);
     try{await pmLog(ls.map(l=>({l,ch:"sms",body})));rr()}catch(e){fail(e)}};
 }
