@@ -223,12 +223,30 @@ async function doLogin(){
   try{await enter(data.user)}catch(e){S.view="login";fail(e)}
 }
 function loginView(){
-  return `<div class="panel" style="max-width:420px;margin:30px auto"><h2>Sign in</h2><p class="muted">Matan staff only.</p>
-  ${S.err?`<div class="note watch">${esc(S.err)}</div>`:""}
-  <p><label class="muted">Email<br><input type="email" id="em" autocomplete="username" style="width:100%"></label></p>
-  <p><label class="muted">Password<br><input type="password" id="pw" autocomplete="current-password" style="width:100%"></label></p>
-  <button class="primary" id="signin" style="margin-top:0">Sign in</button>
-  <p class="muted" style="margin:14px 0 0">Showing the app to someone? <a href="?demo">Open the demo</a>. It uses made-up children only.</p></div>`;
+  // A poster-style front page: the school's navy, red and gold, a paint splash and a big vertical name.
+  const splash=`<svg class="ps-splash" viewBox="0 0 220 220" aria-hidden="true"><g fill="#d7262e">
+    <path d="M110 34c22 4 30 26 52 24 18-2 30 14 22 30-8 15 6 26 2 44-5 20-28 20-38 36-12 18-36 24-52 10-14-12-34-6-44-22-10-18 4-32-2-50-6-17 6-34 24-36 14-2 20-18 36-36z"/>
+    <circle cx="196" cy="40" r="9"/><circle cx="30" cy="186" r="12"/><circle cx="182" cy="182" r="6"/><circle cx="20" cy="60" r="5"/><circle cx="150" cy="16" r="4"/>
+    <path d="M168 150c10 10 26 12 34 26-12 2-26-6-34-26z"/></g>
+    <path d="M60 120c30-40 70-46 100-20" fill="none" stroke="#b68a4e" stroke-width="7" stroke-linecap="round"/></svg>`;
+  const arrow=`<svg class="ps-arrow" viewBox="0 0 120 70" aria-hidden="true"><path d="M6 10c30 6 58 20 74 46" fill="none" stroke="#d7262e" stroke-width="5" stroke-linecap="round"/><path d="M66 50l15 9 2-17" fill="none" stroke="#d7262e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  return `<section class="poster" aria-labelledby="ps-title">
+  <h2 class="ps-name" id="ps-title" aria-label="Matan Premier Kindergarten">MATAN</h2>
+  <div class="ps-mid">
+    <p class="ps-kick">Premier Kindergarten · ${esc(SCH.motto)}</p>
+    <p class="ps-big">Every child seen.<br>Every step counted.</p>
+    <ul class="ps-list"><li>CBC assessment for Playgroup, PP1 and PP2</li><li>Support plans for children with special needs</li><li>Report cards and parent messages in minutes</li><li>AI drafts, the teacher decides</li></ul>
+    ${splash}
+  </div>
+  <div class="ps-form">
+    <h3>Staff sign in</h3>
+    ${S.err?`<div class="note watch">${esc(S.err)}</div>`:""}
+    <p><label>Email<br><input type="email" id="em" autocomplete="username" style="width:100%"></label></p>
+    <p><label>Password<br><input type="password" id="pw" autocomplete="current-password" style="width:100%"></label></p>
+    <button class="primary" id="signin" style="margin-top:0;width:100%">Sign in</button>
+    <div class="ps-demo">${arrow}<a class="ps-demobtn" href="?demo">Open the demo</a><p>Showing the app to someone? The demo uses made-up children only.</p></div>
+  </div>
+</section>`;
 }
 
 /* ---------- display helpers ---------- */
